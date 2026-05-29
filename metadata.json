@@ -1,0 +1,6 @@
+{
+  "name": "Facturación Electrónica POS",
+  "description": "Sistema de facturación electrónica y POS rápido para colmados y tiendas con soporte para código de barras, control de inventario, clientes y crédito.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
