@@ -85,7 +85,7 @@ export default function POS({
   const [bPhone, setBPhone] = useState("809-555-0101");
   const [bAddress, setBAddress] = useState("Av. Winston Churchill, Santiago, RD");
   const [bLogo, setBLogo] = useState("");
-  const [isSettingsOpen, setIsSettingsOpen] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Read logged user email from localStorage
   const loggedUserEmail = useMemo(() => {

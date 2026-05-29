@@ -384,7 +384,11 @@ export default function SalesHistory({
                             <button
                               id={`btn-cancel-sale-${sale.id}`}
                               onClick={() => {
-                                setActiveSaleToAnnull(sale);
+                                onCancelSale(sale.id);
+                                setCustomNotification({
+                                  type: "success",
+                                  text: `La factura ${sale.invoiceNumber} ha sido anulada con éxito. El stock deducido y saldos de crédito han sido revertidos/devueltos.`
+                                });
                               }}
                               title="Anular venta y re-abastecer stock (Devolución)"
                               className="p-1 px-1.5 bg-red-50 hover:bg-red-100 text-red-650 rounded transition cursor-pointer"
@@ -452,7 +456,11 @@ export default function SalesHistory({
                         <button
                           id={`btn-delete-closure-${closure.id}`}
                           onClick={() => {
-                            setActiveClosureIdToDelete(closure.id);
+                            onDeleteClosure(closure.id);
+                            setCustomNotification({
+                              type: "info",
+                              text: "El registro de arqueo ha sido eliminado del historial con éxito."
+                            });
                           }}
                           className="p-1 px-1.5 hover:bg-red-50 text-red-500 rounded transition cursor-pointer"
                         >

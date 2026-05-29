@@ -432,33 +432,11 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
                         >
                           Cancelar
                         </button>
-                      ) : deletingProductId === p.id ? (
-                        <div className="inline-flex items-center gap-2 bg-red-50 p-1 px-2 rounded-lg border border-red-200 animate-fade-in">
-                          <span className="text-[10px] font-extrabold text-red-700 uppercase tracking-tighter">¿Eliminar?</span>
-                          <button
-                            id={`btn-confirm-delete-${p.id}`}
-                            onClick={() => {
-                              onDeleteProduct(p.id);
-                              setDeletingProductId(null);
-                            }}
-                            className="p-0.5 px-2 bg-red-650 hover:bg-red-700 text-white font-black text-[9px] rounded uppercase cursor-pointer transition select-none"
-                          >
-                            Sí
-                          </button>
-                          <button
-                            id={`btn-cancel-delete-${p.id}`}
-                            onClick={() => setDeletingProductId(null)}
-                            className="p-0.5 px-2 bg-slate-200 hover:bg-slate-300 text-slate-705 font-bold text-[9px] rounded uppercase cursor-pointer transition select-none"
-                          >
-                            No
-                          </button>
-                        </div>
                       ) : (
                         <div className="inline-flex items-center">
                           <button
                             id={`edit-stock-${p.id}`}
                             onClick={() => {
-                              setDeletingProductId(null);
                               startQuickEditStock(p);
                             }}
                             className="inline-flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-500 font-bold hover:underline cursor-pointer"
@@ -471,7 +449,7 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
                             id={`delete-product-${p.id}`}
                             onClick={() => {
                               setEditingProductId(null);
-                              setDeletingProductId(p.id);
+                              onDeleteProduct(p.id);
                             }}
                             title="Eliminar del inventario"
                             className="inline-flex items-center gap-1 text-xs text-red-650 hover:text-red-500 font-bold hover:underline cursor-pointer ml-3.5"

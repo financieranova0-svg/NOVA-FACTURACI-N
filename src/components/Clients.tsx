@@ -217,42 +217,21 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
                           </span>
                         )}
 
-                        {deletingClientId === client.id ? (
-                          <div className="flex items-center gap-1 bg-red-50 border border-red-200 p-1 px-1.5 rounded animate-fade-in text-[9px]">
-                            <span className="text-red-700 font-bold">¿Borrar?</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (client.currentDebt > 0) {
-                                  alert("Oops: Este cliente posee balance deudor activo. Debe saldar o abonar a RD$0.00 antes de proceder a la eliminación física.");
-                                  setDeletingClientId(null);
-                                } else {
-                                  onDeleteClient?.(client.id);
-                                  setDeletingClientId(null);
-                                }
-                              }}
-                              className="px-1.5 py-0.5 bg-red-650 hover:bg-red-700 text-white font-extrabold rounded-md cursor-pointer transition text-[9px]"
-                            >
-                              Sí
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setDeletingClientId(null)}
-                              className="px-1.5 py-0.5 bg-white border border-slate-200 text-slate-600 font-extrabold rounded-md cursor-pointer hover:bg-slate-50 transition text-[9px]"
-                            >
-                              No
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setDeletingClientId(client.id)}
-                            title="Eliminar Cliente"
-                            className="p-1 hover:bg-red-50 text-slate-300 hover:text-red-500 rounded transition cursor-pointer"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          id={`btn-delete-client-${client.id}`}
+                          onClick={() => {
+                            if (client.currentDebt > 0) {
+                              alert("Oops: Este cliente posee balance deudor activo. Debe saldar o abonar a RD$0.00 antes de proceder a la eliminación física.");
+                            } else {
+                              onDeleteClient?.(client.id);
+                            }
+                          }}
+                          title="Eliminar Cliente"
+                          className="p-1 px-1.5 hover:bg-red-50 text-slate-300 hover:text-red-500 rounded transition cursor-pointer"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                       </div>
                     </div>
 
