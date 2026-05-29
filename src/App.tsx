@@ -1431,10 +1431,70 @@ export default function App() {
                   Ver Factura PDF
                 </button>
 
-                <button
+                 <button
                   id="execute-reprinted-print"
                   onClick={() => {
-                    window.print();
+                    try {
+                      const printElement = document.getElementById("reprint-document-container");
+                      if (!printElement) return;
+
+                      // Clean up any stale print remnants first
+                      const oldPrintSection = document.getElementById("print-section");
+                      if (oldPrintSection) {
+                        oldPrintSection.remove();
+                      }
+                      const oldPageStyle = document.getElementById("dynamic-page-style");
+                      if (oldPageStyle) {
+                        oldPageStyle.remove();
+                      }
+
+                      // 1. Create a dynamic style block for @page configuration based on selected format
+                      const style = document.createElement("style");
+                      style.id = "dynamic-page-style";
+                      if (reprintFormat === "thermal") {
+                        style.innerHTML = "@page { size: 80mm auto; margin: 0; }";
+                      } else {
+                        style.innerHTML = "@page { size: letter; margin: 15mm; }";
+                      }
+                      document.head.appendChild(style);
+
+                      // 2. Clone the element to a body-direct print-section
+                      const printSection = document.createElement("div");
+                      printSection.id = "print-section";
+                      printSection.innerHTML = printElement.innerHTML;
+                      
+                      // Match the style and fonts of target Receipt container exactly
+                      printSection.className = printElement.className;
+                      if (reprintFormat === "thermal") {
+                        printSection.setAttribute("style", "position: absolute; left: 0; top: 0; width: 80mm !important; padding: 4mm !important; background: white !important;");
+                      } else {
+                        printSection.setAttribute("style", "position: absolute; left: 0; top: 0; width: 100% !important; padding: 10mm !important; background: white !important;");
+                      }
+
+                      document.body.appendChild(printSection);
+
+                      // 3. Trigger native print dialog safely
+                      window.print();
+
+                      // 4. Cleanup after print using a safe timeout to ensure browser spooling finishes
+                      setTimeout(() => {
+                        try {
+                          const currentPrint = document.getElementById("print-section");
+                          if (currentPrint) {
+                            currentPrint.remove();
+                          }
+                          const currentStyle = document.getElementById("dynamic-page-style");
+                          if (currentStyle) {
+                            currentStyle.remove();
+                          }
+                        } catch (err) {
+                          console.error("Timeout cleanup reprint error", err);
+                        }
+                      }, 2500);
+                    } catch (e) {
+                      console.error("Direct print error", e);
+                      window.print();
+                    }
                   }}
                   className="flex items-center justify-center gap-1 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-bold text-[10px] transition cursor-pointer"
                 >

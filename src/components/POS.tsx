@@ -73,7 +73,7 @@ export default function POS({
 
   // Scanner status and modal
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [continuousFocus, setContinuousFocus] = useState(true);
+  const [continuousFocus, setContinuousFocus] = useState(false);
   const [alertMessage, setAlertMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   
   // Invoice print modal state
@@ -131,7 +131,7 @@ export default function POS({
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [continuousFocus, isCameraActive, cart, printedInvoice]);
+  }, [continuousFocus, isCameraActive, printedInvoice]);
 
   // Global keyboard shortcut: F2 focuses scanner input, F4 clears cart
   useEffect(() => {
@@ -184,6 +184,11 @@ export default function POS({
   };
 
   const addToCart = (product: Product) => {
+    // Dismiss mobile soft keyboards/focus when manually choosing/clicking a product card
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
     if (product.stock <= 0) {
       triggerAlert("error", `¡Sin Stock! "${product.name}" no tiene existencias disponibles.`);
       return;
@@ -1141,7 +1146,59 @@ export default function POS({
                 <button
                   id="execute-receipt-print"
                   onClick={() => {
-                    window.print();
+                    try {
+                      const printElement = document.getElementById("reprint-document-container");
+                      if (!printElement) return;
+
+                      // Clean up any stale print remnants first
+                      const oldPrintSection = document.getElementById("print-section");
+                      if (oldPrintSection) {
+                        oldPrintSection.remove();
+                      }
+                      const oldPageStyle = document.getElementById("dynamic-page-style");
+                      if (oldPageStyle) {
+                        oldPageStyle.remove();
+                      }
+
+                      // 1. Create a dynamic style block for @page configuration
+                      const style = document.createElement("style");
+                      style.id = "dynamic-page-style";
+                      style.innerHTML = "@page { size: 80mm auto; margin: 0; }";
+                      document.head.appendChild(style);
+
+                      // 2. Clone the element to a body-direct print-section
+                      const printSection = document.createElement("div");
+                      printSection.id = "print-section";
+                      printSection.innerHTML = printElement.innerHTML;
+                      
+                      // Match the style and fonts of POS Receipt exactly
+                      printSection.className = printElement.className;
+                      printSection.setAttribute("style", "position: absolute; left: 0; top: 0; width: 80mm !important; padding: 4mm !important; background: white !important;");
+
+                      document.body.appendChild(printSection);
+
+                      // 3. Trigger native print dialog safely
+                      window.print();
+
+                      // 4. Cleanup after print using a safe timeout to ensure browser spooling finishes
+                      setTimeout(() => {
+                        try {
+                          const currentPrint = document.getElementById("print-section");
+                          if (currentPrint) {
+                            currentPrint.remove();
+                          }
+                          const currentStyle = document.getElementById("dynamic-page-style");
+                          if (currentStyle) {
+                            currentStyle.remove();
+                          }
+                        } catch (err) {
+                          console.error("Timeout cleanup print error", err);
+                        }
+                      }, 2500);
+                    } catch (e) {
+                      console.error("Direct print error", e);
+                      window.print();
+                    }
                   }}
                   className="flex items-center justify-center gap-1 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-bold text-[10px] transition cursor-pointer"
                 >

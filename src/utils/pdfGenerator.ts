@@ -28,10 +28,47 @@ export function getBusinessConfig(userEmail: string): BusinessConfig {
 }
 
 export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "thermal" | "letter" = "letter"): Blob {
+  let finalFormat: string | [number, number] = "a4";
+
+  if (format === "thermal") {
+    let estimatedHeight = 10; // Initial start offset
+    estimatedHeight += 5;     // Address spacing
+    estimatedHeight += 4;     // RNC/TEL line spacing
+    estimatedHeight += 4;     // Line divider line spacing
+    estimatedHeight += 5;     // Factura number line spacing
+    estimatedHeight += 4;     // Date line spacing
+    if (sale.ncfCode) {
+      estimatedHeight += 4;
+    }
+    if (sale.client) {
+      estimatedHeight += 4; // Client name line spacing
+      if (sale.client.rnc) {
+        estimatedHeight += 4; // Client RNC line spacing
+      }
+    }
+    estimatedHeight += 5;     // Line divider spacing
+    estimatedHeight += 4;     // Table header line spacing
+    estimatedHeight += 3;     // Divider line spacing
+    
+    // Items list (4.5mm per item)
+    estimatedHeight += sale.items.length * 4.5;
+    
+    estimatedHeight += 5;     // Divider line spacing
+    estimatedHeight += 5;     // Subtotal line spacing
+    estimatedHeight += 4.5;   // ITBIS line spacing
+    estimatedHeight += 5;     // Total line spacing
+    estimatedHeight += 6;     // Payment condition line spacing
+    estimatedHeight += 8;     // Thank you line spacing
+    estimatedHeight += 4;     // DGII certified line spacing
+    estimatedHeight += 12;    // Sane bottom padding margin to prevent any cutoff
+    
+    finalFormat = [80, Math.ceil(estimatedHeight)];
+  }
+
   const doc = new jsPDF({
     orientation: "portrait",
     unit: "mm",
-    format: format === "thermal" ? [80, 200] : "a4"
+    format: finalFormat
   });
 
   if (format === "thermal") {
