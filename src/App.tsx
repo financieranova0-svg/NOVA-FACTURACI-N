@@ -84,6 +84,15 @@ export default function App() {
   // Receipt reprint simulation
   const [reprintSale, setReprintSale] = useState<Sale | null>(null);
   const [reprintFormat, setReprintFormat] = useState<"thermal" | "letter">("thermal");
+
+  const handleCloseReprint = () => {
+    setReprintSale(null);
+    const oldPrint = document.getElementById("print-section");
+    if (oldPrint) oldPrint.remove();
+    const oldStyle = document.getElementById("dynamic-page-style");
+    if (oldStyle) oldStyle.remove();
+  };
+
   const reprintConfig = useMemo(() => {
     return getBusinessConfig(currentUser?.email || "guest");
   }, [currentUser, reprintSale]);
@@ -157,15 +166,7 @@ export default function App() {
       if (storedClients) {
         setClients(JSON.parse(storedClients));
       } else {
-        const defaultClients = isDemoAdmin ? INITIAL_CLIENTS : [
-          {
-            id: "cli-generico",
-            name: "Cliente Contado (Genérico)",
-            phone: "N/A",
-            creditLimit: 0,
-            currentDebt: 0
-          }
-        ];
+        const defaultClients = isDemoAdmin ? INITIAL_CLIENTS : [];
         setClients(defaultClients);
         localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(defaultClients));
       }
@@ -475,17 +476,32 @@ export default function App() {
 
   // Mock server reset button to start clean
   const handleSystemRestoreDefault = () => {
-    if (confirm("🚨 ¿Deseas restablecer el sistema? Se borrarán las facturas de esta sesión y se recuperará el catálogo por defecto.")) {
-      localStorage.removeItem("factura_pos_products");
-      localStorage.removeItem("factura_pos_clients");
-      localStorage.removeItem("factura_pos_sales");
-      localStorage.removeItem("factura_pos_ncf");
+    if (!currentUser) return;
+    const email = currentUser.email;
+    const isDemoAdmin = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
+
+    if (confirm("🚨 ¿Deseas restablecer el sistema? Se borrarán las facturas de esta sesión y se recuperará el catálogo correspondiente.")) {
+      localStorage.removeItem(`factura_pos_products_${email}`);
+      localStorage.removeItem(`factura_pos_clients_${email}`);
+      localStorage.removeItem(`factura_pos_sales_${email}`);
+      localStorage.removeItem(`factura_pos_ncf_${email}`);
+      localStorage.removeItem(`factura_pos_closures_${email}`);
       
-      setProducts(INITIAL_PRODUCTS);
-      setClients(INITIAL_CLIENTS);
+      const defaultProducts = isDemoAdmin ? INITIAL_PRODUCTS : [];
+      const defaultClients = isDemoAdmin ? INITIAL_CLIENTS : [];
+
+      setProducts(defaultProducts);
+      setClients(defaultClients);
       setSales([]);
       setNcfCounts({ B01: 1, B02: 1 });
+      setClosures([]);
       
+      localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(defaultProducts));
+      localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(defaultClients));
+      localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify([]));
+      localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify({ B01: 1, B02: 1 }));
+      localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify([]));
+
       setActiveTab("pos");
     }
   };
@@ -1163,194 +1179,226 @@ export default function App() {
               </h3>
               <button
                 id="btn-reprint-close-upper"
-                onClick={() => setReprintSale(null)}
+                onClick={handleCloseReprint}
                 className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
+            {/* Format toggle tabs within the modal */}
+            <div className="flex w-full bg-slate-100 p-1 rounded-lg mb-3 gap-1 shadow-inner border border-slate-150 shrink-0">
+              <button
+                id="modal-toggle-thermal"
+                type="button"
+                onClick={() => setReprintFormat("thermal")}
+                className={`flex-1 py-1.5 rounded-md text-[10px] font-extrabold uppercase transition cursor-pointer text-center flex items-center justify-center gap-1.5 ${
+                  reprintFormat === "thermal"
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "text-slate-600 hover:text-slate-800 hover:bg-slate-200/60"
+                }`}
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Tíquet Botonera (80mm)
+              </button>
+              <button
+                id="modal-toggle-letter"
+                type="button"
+                onClick={() => setReprintFormat("letter")}
+                className={`flex-1 py-1.5 rounded-md text-[10px] font-extrabold uppercase transition cursor-pointer text-center flex items-center justify-center gap-1.5 ${
+                  reprintFormat === "letter"
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "text-slate-600 hover:text-slate-800 hover:bg-slate-200/60"
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Papel Carta (8.5x11)
+              </button>
+            </div>
+
             {/* Simulated printable box */}
             <div id="reprint-document-container" className="w-full bg-slate-50 border border-slate-200 p-4.5 rounded-lg max-h-[460px] overflow-y-auto font-sans leading-relaxed text-xs">
               
-              {/* Thermal ticket style preview */}
-              <div id="print-thermal-layout" className="bg-white p-5 border border-slate-200/50 shadow-xs font-mono text-[10px] space-y-1 text-slate-700 max-w-sm mx-auto leading-tight">
-                {reprintConfig.logo && (
-                  <div className="flex justify-center pb-2">
-                    <img src={reprintConfig.logo} referrerPolicy="no-referrer" alt="Logo de Factura" className="h-8 w-auto object-contain" />
-                  </div>
-                )}
-                <div className="text-center font-black uppercase text-slate-800 tracking-tight text-[11px]">
-                  *** {reprintConfig.name.toUpperCase()} ***
-                </div>
-                <div className="text-center text-[8.5px] text-slate-500 leading-normal font-sans">
-                  {reprintConfig.address.toUpperCase()}<br/>
-                  RNC: {reprintConfig.rnc} • TEL: {reprintConfig.phone}<br/>
-                  REGISTRADA EN DGII COMPROBANTES<br/>
-                  ----------------------------------------<br/>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>FECHA:</span>
-                  <span>{new Date(reprintSale.date).toLocaleString("es-DO")}</span>
-                </div>
-                <div className="flex justify-between font-bold text-slate-800">
-                  <span>FACTURA #:</span>
-                  <span>{reprintSale.invoiceNumber}</span>
-                </div>
-                {reprintSale.ncfCode && (
-                  <div className="flex justify-between font-bold bg-amber-50 p-0.5 border border-amber-200/40 text-[9.5px]">
-                    <span>COMPROBANTE NCF:</span>
-                    <span>{reprintSale.ncfCode}</span>
-                  </div>
-                )}
-                {reprintSale.client && (
-                  <div className="border border-slate-200 bg-slate-50/50 p-1.5 mt-1 text-[9px]">
-                    <span className="block font-bold">CLIENTE: {reprintSale.client.name.toUpperCase()}</span>
-                    {reprintSale.client.phone && <span className="block">TEL: {reprintSale.client.phone}</span>}
-                  </div>
-                )}
-                <div className="border-t border-dashed border-slate-300 my-1 pt-1 font-bold">
-                  ITEMS FACTURADOS
-                </div>
-                <div className="space-y-1">
-                  {reprintSale.items.map((item) => (
-                    <div key={item.product.id} className="flex justify-between text-[9px]">
-                      <span>{item.quantity}x {item.product.name.slice(0, 22)}</span>
-                      <span>RD${(item.product.price * item.quantity).toFixed(0)}</span>
+              {reprintFormat === "thermal" ? (
+                /* Thermal ticket style preview */
+                <div id="print-thermal-layout" className="bg-white p-5 border border-slate-200/50 shadow-xs font-mono text-[10px] space-y-1 text-slate-700 max-w-sm mx-auto leading-tight">
+                  {reprintConfig.logo && (
+                    <div className="flex justify-center pb-2">
+                      <img src={reprintConfig.logo} referrerPolicy="no-referrer" alt="Logo de Factura" className="h-8 w-auto object-contain" />
                     </div>
-                  ))}
-                </div>
-                <div className="border-t border-dashed border-slate-300 my-1.5 pt-1 space-y-0.5 text-right font-bold text-slate-800">
-                  <div className="flex justify-between text-slate-500">
-                    <span>SUBTOTAL:</span>
-                    <span>RD${reprintSale.subtotal.toFixed(0)}</span>
+                  )}
+                  <div className="text-center font-black uppercase text-slate-800 tracking-tight text-[11px]">
+                    *** {reprintConfig.name.toUpperCase()} ***
                   </div>
-                  <div className="flex justify-between text-slate-500 font-normal">
-                    <span>ITBIS (18%):</span>
-                    <span>RD${reprintSale.itbis.toFixed(0)}</span>
+                  <div className="text-center text-[8.5px] text-slate-500 leading-normal font-sans">
+                    {reprintConfig.address.toUpperCase()}<br/>
+                    RNC: {reprintConfig.rnc} • TEL: {reprintConfig.phone}<br/>
+                    REGISTRADA EN DGII COMPROBANTES<br/>
+                    ----------------------------------------<br/>
                   </div>
-                  <div className="flex justify-between text-[11px] font-black text-emerald-800 border-t border-slate-200 pt-0.5 mt-0.5">
-                    <span>TOTAL COMPRA:</span>
-                    <span>RD${reprintSale.total.toFixed(0)}</span>
-                  </div>
-                </div>
-                <div className="border-t border-dashed border-slate-350 pt-1 text-[9px] font-bold">
-                  <span>CONDICIÓN: {reprintSale.paymentMethod.toUpperCase()}</span>
-                </div>
-                <div className="text-center text-[7.5px] text-slate-400 pt-3 uppercase tracking-wider">
-                  *** GRACIAS POR PREFERIRNOS ***
-                </div>
-              </div>
 
-              {/* MAQUINILLA PAPER SIZE VIEW (PDF) */}
-              <div id="print-maquinilla-layout" className="bg-white p-6 border-2 border-slate-400 font-sans text-slate-800 space-y-4 shadow-sm text-xs mt-4 rounded">
-                <div className="flex justify-between items-start border-b-2 border-slate-200 pb-3">
-                  <div className="flex gap-3 items-start">
-                    {reprintConfig.logo && (
-                      <img src={reprintConfig.logo} referrerPolicy="no-referrer" alt="Logo de Factura" className="h-10 w-auto object-contain bg-white p-0.5 border border-slate-200 rounded" />
-                    )}
-                    <div>
-                      <h4 className="text-sm font-black uppercase text-emerald-700">{reprintConfig.name.toUpperCase()}</h4>
-                      <p className="text-[10px] text-slate-500 font-bold leading-normal uppercase">
-                        Dirección: {reprintConfig.address.toUpperCase()}<br/>
-                        RNC: {reprintConfig.rnc} | Tel: {reprintConfig.phone}<br/>
-                        CF ELECTRÓNICO (DGII DOMINICANA)
-                      </p>
-                    </div>
+                  <div className="flex justify-between">
+                    <span>FECHA:</span>
+                    <span>{new Date(reprintSale.date).toLocaleString("es-DO")}</span>
                   </div>
-                  <div className="text-right">
-                    <span className="font-extrabold text-[10px] bg-slate-900 text-white px-2 py-0.5 rounded uppercase">Factura de Crédito Fiscal</span>
-                    <div className="text-[10px] text-slate-650 mt-1.5 font-mono">
-                      <b>No. Factura:</b> {reprintSale.invoiceNumber}<br/>
-                      <b>NCF DGII:</b> <b className="text-emerald-700">{reprintSale.ncfCode || "No aplica / Registro"}</b>
-                    </div>
+                  <div className="flex justify-between font-bold text-slate-800">
+                    <span>FACTURA #:</span>
+                    <span>{reprintSale.invoiceNumber}</span>
                   </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded border border-slate-200">
-                  <div>
-                    <span className="text-[9px] font-bold uppercase text-slate-400 block tracking-tight mb-0.5">Datos Del Adquiriente</span>
-                    <b className="text-slate-800 text-[11px] block">{reprintSale.client ? reprintSale.client.name.toUpperCase() : "CLIENTE GENERICO (AL CONTADO)"}</b>
-                    {reprintSale.client && (
-                      <div className="text-[10px] text-slate-500 mt-1 space-y-0.5">
-                        <p>Celular: {reprintSale.client.phone || "No especificado"}</p>
-                        <p>Límite Crédito: RD$ {reprintSale.client.creditLimit?.toLocaleString()}</p>
+                  {reprintSale.ncfCode && (
+                    <div className="flex justify-between font-bold bg-amber-50 p-0.5 border border-amber-200/40 text-[9.5px]">
+                      <span>COMPROBANTE NCF:</span>
+                      <span>{reprintSale.ncfCode}</span>
+                    </div>
+                  )}
+                  {reprintSale.client && (
+                    <div className="border border-slate-200 bg-slate-50/50 p-1.5 mt-1 text-[9px]">
+                      <span className="block font-bold">CLIENTE: {reprintSale.client.name.toUpperCase()}</span>
+                      {reprintSale.client.phone && <span className="block">TEL: {reprintSale.client.phone}</span>}
+                    </div>
+                  )}
+                  <div className="border-t border-dashed border-slate-300 my-1 pt-1 font-bold">
+                    ITEMS FACTURADOS
+                  </div>
+                  <div className="space-y-1">
+                    {reprintSale.items.map((item) => (
+                      <div key={item.product.id} className="flex justify-between text-[9px]">
+                        <span>{item.quantity}x {item.product.name.slice(0, 22)}</span>
+                        <span>RD${(item.product.price * item.quantity).toFixed(0)}</span>
                       </div>
-                    )}
+                    ))}
                   </div>
-                  <div className="text-right">
-                    <span className="text-[9px] font-bold uppercase text-slate-400 block tracking-tight mb-0.5">Detalles del Documento</span>
-                    <p className="font-mono text-[10px]"><b>Emisión:</b> {new Date(reprintSale.date).toLocaleDateString()}</p>
-                    <p className="font-mono text-[10px]"><b>Forma de Pago:</b> {reprintSale.paymentMethod}</p>
-                    <p className="font-mono text-[10px]"><b>Moneda:</b> DOP (Pesos Dominicanos)</p>
-                  </div>
-                </div>
-
-                {/* Table details */}
-                <table className="w-full text-left text-[11px] border-collapse">
-                  <thead>
-                    <tr className="bg-slate-100 border-b border-slate-200">
-                      <th className="py-2 px-3 font-bold">Código Barra</th>
-                      <th className="py-2 px-3 font-bold">Descripción Producto</th>
-                      <th className="py-2 px-3 font-bold text-center">Cant.</th>
-                      <th className="py-2 px-3 font-bold text-right">Precio Unitario</th>
-                      <th className="py-2 px-3 font-bold text-right">ITBIS (18%)</th>
-                      <th className="py-2 px-3 font-bold text-right">Monto Total</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-150">
-                    {reprintSale.items.map((item) => {
-                      const basePrice = item.product.price / 1.18;
-                      const lineItbis = item.product.price - basePrice;
-                      return (
-                        <tr key={item.product.id}>
-                          <td className="py-2 px-3 font-mono text-[10px] text-slate-500">{item.product.barcode || "N/A"}</td>
-                          <td className="py-2 px-3 font-medium text-slate-900">{item.product.name}</td>
-                          <td className="py-2 px-3 text-center font-bold">{item.quantity}</td>
-                          <td className="py-2 px-3 text-right font-mono">RD${basePrice.toFixed(2)}</td>
-                          <td className="py-2 px-3 text-right font-mono">RD${(lineItbis * item.quantity).toFixed(2)}</td>
-                          <td className="py-2 px-3 text-right font-mono font-bold">RD${(item.product.price * item.quantity).toFixed(0)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-
-                {/* Totals box */}
-                <div className="flex justify-end pt-2 border-t border-slate-200">
-                  <div className="w-64 space-y-1 text-right font-mono text-[11px]">
+                  <div className="border-t border-dashed border-slate-300 my-1.5 pt-1 space-y-0.5 text-right font-bold text-slate-800">
                     <div className="flex justify-between text-slate-500">
-                      <span>Total Neto Gravado:</span>
-                      <span>RD$ {reprintSale.subtotal.toFixed(2)}</span>
+                      <span>SUBTOTAL:</span>
+                      <span>RD${reprintSale.subtotal.toFixed(0)}</span>
                     </div>
-                    <div className="flex justify-between text-slate-550">
-                      <span>ITBIS Total Liquidado:</span>
-                      <span>RD$ {reprintSale.itbis.toFixed(2)}</span>
+                    <div className="flex justify-between text-slate-500 font-normal">
+                      <span>ITBIS (18%):</span>
+                      <span>RD${reprintSale.itbis.toFixed(0)}</span>
                     </div>
-                    <div className="flex justify-between text-xs font-black text-rose-700 bg-rose-50/40 p-1 rounded">
-                      <span>Total Factura RD$:</span>
-                      <span>RD$ {reprintSale.total.toFixed(2)}</span>
+                    <div className="flex justify-between text-[11px] font-black text-emerald-800 border-t border-slate-200 pt-0.5 mt-0.5">
+                      <span>TOTAL COMPRA:</span>
+                      <span>RD${reprintSale.total.toFixed(0)}</span>
                     </div>
                   </div>
+                  <div className="border-t border-dashed border-slate-350 pt-1 text-[9px] font-bold">
+                    <span>CONDICIÓN: {reprintSale.paymentMethod.toUpperCase()}</span>
+                  </div>
+                  <div className="text-center text-[7.5px] text-slate-400 pt-3 uppercase tracking-wider">
+                    *** GRACIAS POR PREFERIRNOS ***
+                  </div>
                 </div>
+              ) : (
+                /* MAQUINILLA PAPER SIZE VIEW (PDF) */
+                <div id="print-maquinilla-layout" className="bg-white p-6 border-2 border-slate-400 font-sans text-slate-800 space-y-4 shadow-sm text-xs rounded">
+                  <div className="flex justify-between items-start border-b-2 border-slate-200 pb-3">
+                    <div className="flex gap-3 items-start">
+                      {reprintConfig.logo && (
+                        <img src={reprintConfig.logo} referrerPolicy="no-referrer" alt="Logo de Factura" className="h-10 w-auto object-contain bg-white p-0.5 border border-slate-200 rounded" />
+                      )}
+                      <div>
+                        <h4 className="text-sm font-black uppercase text-emerald-700">{reprintConfig.name.toUpperCase()}</h4>
+                        <p className="text-[10px] text-slate-500 font-bold leading-normal uppercase">
+                          Dirección: {reprintConfig.address.toUpperCase()}<br/>
+                          RNC: {reprintConfig.rnc} | Tel: {reprintConfig.phone}<br/>
+                          CF ELECTRÓNICO (DGII DOMINICANA)
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-extrabold text-[10px] bg-slate-900 text-white px-2 py-0.5 rounded uppercase">Factura de Crédito Fiscal</span>
+                      <div className="text-[10px] text-slate-650 mt-1.5 font-mono">
+                        <b>No. Factura:</b> {reprintSale.invoiceNumber}<br/>
+                        <b>NCF DGII:</b> <b className="text-emerald-700">{reprintSale.ncfCode || "No aplica / Registro"}</b>
+                      </div>
+                    </div>
+                  </div>
 
-                {/* Signatures */}
-                <div className="grid grid-cols-2 gap-4.5 pt-6 text-center text-[9px] text-slate-400">
-                  <div className="border-t border-slate-300 pt-3">
-                    <p className="font-bold text-slate-600 uppercase">Entregado Conforme / Despacho</p>
-                    <p className="mt-1 font-mono">{liveUserState.email}</p>
+                  <div className="grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded border border-slate-200">
+                    <div>
+                      <span className="text-[9px] font-bold uppercase text-slate-400 block tracking-tight mb-0.5">Datos Del Adquiriente</span>
+                      <b className="text-slate-800 text-[11px] block">{reprintSale.client ? reprintSale.client.name.toUpperCase() : "CLIENTE GENERICO (AL CONTADO)"}</b>
+                      {reprintSale.client && (
+                        <div className="text-[10px] text-slate-500 mt-1 space-y-0.5">
+                          <p>Celular: {reprintSale.client.phone || "No especificado"}</p>
+                          <p>Límite Crédito: RD$ {reprintSale.client.creditLimit?.toLocaleString()}</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[9px] font-bold uppercase text-slate-400 block tracking-tight mb-0.5">Detalles del Documento</span>
+                      <p className="font-mono text-[10px]"><b>Emisión:</b> {new Date(reprintSale.date).toLocaleDateString()}</p>
+                      <p className="font-mono text-[10px]"><b>Forma de Pago:</b> {reprintSale.paymentMethod}</p>
+                      <p className="font-mono text-[10px]"><b>Moneda:</b> DOP (Pesos Dominicanos)</p>
+                    </div>
                   </div>
-                  <div className="border-t border-slate-300 pt-3">
-                    <p className="font-bold text-slate-600 uppercase">Recibido Conforme / Firma Cliente</p>
-                    <p className="mt-1 italic">{reprintSale.client ? reprintSale.client.name : "Cliente Contado"}</p>
-                  </div>
-                </div>
 
-                <div className="text-[9px] text-center text-slate-400 leading-normal bg-slate-50 p-1.5 rounded">
-                  “Este documento constituye una copia con certificación digital simulada de la Factura de Crédito Fiscal autorizada por la DGII. Conforme al Art. 5 de la Ley 126-02 sobre Comercio Electrónico.”
+                  {/* Table details */}
+                  <table className="w-full text-left text-[11px] border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 border-b border-slate-200">
+                        <th className="py-2 px-3 font-bold">Código Barra</th>
+                        <th className="py-2 px-3 font-bold">Descripción Producto</th>
+                        <th className="py-2 px-3 font-bold text-center">Cant.</th>
+                        <th className="py-2 px-3 font-bold text-right">Precio Unitario</th>
+                        <th className="py-2 px-3 font-bold text-right">ITBIS (18%)</th>
+                        <th className="py-2 px-3 font-bold text-right">Monto Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-150">
+                      {reprintSale.items.map((item) => {
+                        const basePrice = item.product.price / 1.18;
+                        const lineItbis = item.product.price - basePrice;
+                        return (
+                          <tr key={item.product.id}>
+                            <td className="py-2 px-3 font-mono text-[10px] text-slate-500">{item.product.barcode || "N/A"}</td>
+                            <td className="py-2 px-3 font-medium text-slate-900">{item.product.name}</td>
+                            <td className="py-2 px-3 text-center font-bold">{item.quantity}</td>
+                            <td className="py-2 px-3 text-right font-mono">RD${basePrice.toFixed(2)}</td>
+                            <td className="py-2 px-3 text-right font-mono">RD${(lineItbis * item.quantity).toFixed(2)}</td>
+                            <td className="py-2 px-3 text-right font-mono font-bold">RD${(item.product.price * item.quantity).toFixed(0)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+
+                  {/* Totals box */}
+                  <div className="flex justify-end pt-2 border-t border-slate-200">
+                    <div className="w-64 space-y-1 text-right font-mono text-[11px]">
+                      <div className="flex justify-between text-slate-500">
+                        <span>Total Neto Gravado:</span>
+                        <span>RD$ {reprintSale.subtotal.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-550">
+                        <span>ITBIS Total Liquidado:</span>
+                        <span>RD$ {reprintSale.itbis.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs font-black text-rose-700 bg-rose-50/40 p-1 rounded">
+                        <span>Total Factura RD$:</span>
+                        <span>RD$ {reprintSale.total.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Signatures */}
+                  <div className="grid grid-cols-2 gap-4.5 pt-6 text-center text-[9px] text-slate-400">
+                    <div className="border-t border-slate-300 pt-3">
+                      <p className="font-bold text-slate-600 uppercase">Entregado Conforme / Despacho</p>
+                      <p className="mt-1 font-mono">{liveUserState.email}</p>
+                    </div>
+                    <div className="border-t border-slate-300 pt-3">
+                      <p className="font-bold text-slate-600 uppercase">Recibido Conforme / Firma Cliente</p>
+                      <p className="mt-1 italic">{reprintSale.client ? reprintSale.client.name : "Cliente Contado"}</p>
+                    </div>
+                  </div>
+
+                  <div className="text-[9px] text-center text-slate-400 leading-normal bg-slate-50 p-1.5 rounded">
+                    “Este documento constituye una copia con certificación digital simulada de la Factura de Crédito Fiscal autorizada por la DGII. Conforme al Art. 5 de la Ley 126-02 sobre Comercio Electrónico.”
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Print, WhatsApp, and PDF Actions Suite */}
@@ -1431,68 +1479,70 @@ export default function App() {
                   Ver Factura PDF
                 </button>
 
-                 <button
+                <button
                   id="execute-reprinted-print"
                   onClick={() => {
                     try {
                       const printElement = document.getElementById("reprint-document-container");
                       if (!printElement) return;
 
-                      // Clean up any stale print remnants first
-                      const oldPrintSection = document.getElementById("print-section");
-                      if (oldPrintSection) {
-                        oldPrintSection.remove();
-                      }
-                      const oldPageStyle = document.getElementById("dynamic-page-style");
-                      if (oldPageStyle) {
-                        oldPageStyle.remove();
-                      }
+                      // Open popup window specifically configured for current format
+                      const printWindow = window.open("", "_blank", "width=800,height=600");
+                      if (printWindow) {
+                        printWindow.document.write(`
+                          <html>
+                            <head>
+                              <title>Imprimir Factura - Nova Facturación</title>
+                              <style>
+                                @page {
+                                  size: ${reprintFormat === "thermal" ? "80mm auto" : "letter"};
+                                  margin: ${reprintFormat === "thermal" ? "0" : "15mm"};
+                                }
+                                body {
+                                  margin: 0;
+                                  padding: ${reprintFormat === "thermal" ? "4mm" : "0"};
+                                  background: white !important;
+                                  color: black !important;
+                                  -webkit-print-color-adjust: exact;
+                                  print-color-adjust: exact;
+                                }
+                                @media print {
+                                  body { background: white !important; }
+                                  .no-print { display: none !important; }
+                                }
+                              </style>
+                            </head>
+                            <body class="p-4 bg-white text-black">
+                              <div id="print-content"></div>
+                            </body>
+                          </html>
+                        `);
 
-                      // 1. Create a dynamic style block for @page configuration based on selected format
-                      const style = document.createElement("style");
-                      style.id = "dynamic-page-style";
-                      if (reprintFormat === "thermal") {
-                        style.innerHTML = "@page { size: 80mm auto; margin: 0; }";
-                      } else {
-                        style.innerHTML = "@page { size: letter; margin: 15mm; }";
-                      }
-                      document.head.appendChild(style);
+                        // Clone and copy all styles from the current document to get full layout & tailwind styles
+                        const styles = document.querySelectorAll('style, link[rel="stylesheet"]');
+                        styles.forEach((node) => {
+                          printWindow.document.head.appendChild(node.cloneNode(true));
+                        });
 
-                      // 2. Clone the element to a body-direct print-section
-                      const printSection = document.createElement("div");
-                      printSection.id = "print-section";
-                      printSection.innerHTML = printElement.innerHTML;
-                      
-                      // Match the style and fonts of target Receipt container exactly
-                      printSection.className = printElement.className;
-                      if (reprintFormat === "thermal") {
-                        printSection.setAttribute("style", "position: absolute; left: 0; top: 0; width: 80mm !important; padding: 4mm !important; background: white !important;");
-                      } else {
-                        printSection.setAttribute("style", "position: absolute; left: 0; top: 0; width: 100% !important; padding: 10mm !important; background: white !important;");
-                      }
-
-                      document.body.appendChild(printSection);
-
-                      // 3. Trigger native print dialog safely
-                      window.print();
-
-                      // 4. Cleanup after print using a safe timeout to ensure browser spooling finishes
-                      setTimeout(() => {
-                        try {
-                          const currentPrint = document.getElementById("print-section");
-                          if (currentPrint) {
-                            currentPrint.remove();
-                          }
-                          const currentStyle = document.getElementById("dynamic-page-style");
-                          if (currentStyle) {
-                            currentStyle.remove();
-                          }
-                        } catch (err) {
-                          console.error("Timeout cleanup reprint error", err);
+                        // Inject the contents
+                        const container = printWindow.document.getElementById("print-content");
+                        if (container) {
+                          container.innerHTML = printElement.innerHTML;
                         }
-                      }, 2500);
+
+                        printWindow.document.close();
+
+                        // Launch native printing safely
+                        setTimeout(() => {
+                          printWindow.focus();
+                          printWindow.print();
+                          printWindow.close();
+                        }, 500);
+                      } else {
+                        window.print();
+                      }
                     } catch (e) {
-                      console.error("Direct print error", e);
+                      console.error("Popup printing error fallback", e);
                       window.print();
                     }
                   }}
@@ -1505,8 +1555,8 @@ export default function App() {
 
               <button
                 id="dismiss-reprint-modal"
-                onClick={() => setReprintSale(null)}
-                className="py-1.5 border border-slate-300 text-slate-705 bg-white hover:bg-slate-100 rounded-lg font-bold text-xs transition cursor-pointer text-center mt-1"
+                onClick={handleCloseReprint}
+                className="py-1.5 border border-slate-300 text-slate-705 bg-white hover:bg-slate-100 rounded-lg font-bold text-xs transition cursor-pointer text-center mt-1 w-full"
               >
                 Cerrar Ventana
               </button>

@@ -1029,8 +1029,8 @@ export default function POS({
               Ticket ID: {printedInvoice.invoiceNumber}
             </p>
 
-            {/* Thermal ticket style preview container using the reprint-document-container ID for printing */}
-            <div id="reprint-document-container" className="w-full bg-slate-50 border border-slate-200 p-4.5 rounded-lg font-mono text-slate-700 text-[10px] space-y-1.5 shadow-xs leading-tight max-h-[350px] overflow-y-auto">
+            {/* Thermal ticket style preview container using the pos-receipt-document ID for printing */}
+            <div id="pos-receipt-document" className="w-full bg-slate-50 border border-slate-200 p-4.5 rounded-lg font-mono text-slate-705 text-[10px] space-y-1.5 shadow-xs leading-tight max-h-[350px] overflow-y-auto">
               
               {bLogo && (
                 <div className="flex justify-center pb-2.5">
@@ -1041,7 +1041,7 @@ export default function POS({
               <div className="text-center font-bold uppercase text-slate-800 tracking-tight">
                 *** {bName.toUpperCase()} ***
               </div>
-              <div className="text-center text-[9px] text-slate-500 leading-normal">
+              <div className="text-center text-[9px] text-slate-505 leading-normal">
                 {bAddress.toUpperCase()}<br/>
                 Tel: {bPhone} | RNC: {bRnc}<br/>
                 CF ELECTRÓNICO (DGII)<br/>
@@ -1137,7 +1137,7 @@ export default function POS({
                 <button
                   id="btn-pos-receipt-pdf"
                   onClick={handleViewPdf}
-                  className="flex items-center justify-center gap-1 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg font-bold text-[10px] transition cursor-pointer"
+                  className="flex items-center justify-center gap-1 py-1.5 bg-slate-100 text-slate-705 hover:bg-slate-200 rounded-lg font-bold text-[10px] transition cursor-pointer"
                 >
                   <FileText className="h-3.5 w-3.5" />
                   Ver Factura PDF
@@ -1147,56 +1147,66 @@ export default function POS({
                   id="execute-receipt-print"
                   onClick={() => {
                     try {
-                      const printElement = document.getElementById("reprint-document-container");
+                      const printElement = document.getElementById("pos-receipt-document");
                       if (!printElement) return;
 
-                      // Clean up any stale print remnants first
-                      const oldPrintSection = document.getElementById("print-section");
-                      if (oldPrintSection) {
-                        oldPrintSection.remove();
-                      }
-                      const oldPageStyle = document.getElementById("dynamic-page-style");
-                      if (oldPageStyle) {
-                        oldPageStyle.remove();
-                      }
+                      // Open a popup window for printing to bypass standard sandbox print constraints
+                      const printWindow = window.open("", "_blank", "width=400,height=600");
+                      if (printWindow) {
+                        printWindow.document.write(`
+                          <html>
+                            <head>
+                              <title>Imprimir Tíquet - Nova Facturación</title>
+                              <style>
+                                @page {
+                                  size: 80mm auto;
+                                  margin: 0;
+                                }
+                                body {
+                                  margin: 0;
+                                  padding: 4mm;
+                                  background: white !important;
+                                  color: black !important;
+                                  -webkit-print-color-adjust: exact;
+                                  print-color-adjust: exact;
+                                }
+                                @media print {
+                                  body { background: white !important; }
+                                  .no-print { display: none !important; }
+                                }
+                              </style>
+                            </head>
+                            <body class="p-4 bg-white text-black font-mono">
+                              <div id="print-content" class="w-full text-xs p-0 m-0 bg-white"></div>
+                            </body>
+                          </html>
+                        `);
 
-                      // 1. Create a dynamic style block for @page configuration
-                      const style = document.createElement("style");
-                      style.id = "dynamic-page-style";
-                      style.innerHTML = "@page { size: 80mm auto; margin: 0; }";
-                      document.head.appendChild(style);
+                        // Clone and copy all styles from the parent document to get clean layout & font stylings
+                        document.querySelectorAll('style, link[rel="stylesheet"]').forEach((node) => {
+                          printWindow.document.head.appendChild(node.cloneNode(true));
+                        });
 
-                      // 2. Clone the element to a body-direct print-section
-                      const printSection = document.createElement("div");
-                      printSection.id = "print-section";
-                      printSection.innerHTML = printElement.innerHTML;
-                      
-                      // Match the style and fonts of POS Receipt exactly
-                      printSection.className = printElement.className;
-                      printSection.setAttribute("style", "position: absolute; left: 0; top: 0; width: 80mm !important; padding: 4mm !important; background: white !important;");
-
-                      document.body.appendChild(printSection);
-
-                      // 3. Trigger native print dialog safely
-                      window.print();
-
-                      // 4. Cleanup after print using a safe timeout to ensure browser spooling finishes
-                      setTimeout(() => {
-                        try {
-                          const currentPrint = document.getElementById("print-section");
-                          if (currentPrint) {
-                            currentPrint.remove();
-                          }
-                          const currentStyle = document.getElementById("dynamic-page-style");
-                          if (currentStyle) {
-                            currentStyle.remove();
-                          }
-                        } catch (err) {
-                          console.error("Timeout cleanup print error", err);
+                        // Set the contents to print
+                        const contentDiv = printWindow.document.getElementById("print-content");
+                        if (contentDiv) {
+                          contentDiv.innerHTML = printElement.innerHTML;
                         }
-                      }, 2500);
+
+                        printWindow.document.close();
+
+                        // Fire native printing safely
+                        setTimeout(() => {
+                          printWindow.focus();
+                          printWindow.print();
+                          printWindow.close();
+                        }, 500);
+                      } else {
+                        // Fallback to inline printing if popup is strict blocked
+                        window.print();
+                      }
                     } catch (e) {
-                      console.error("Direct print error", e);
+                      console.error("Popup print exception fallback", e);
                       window.print();
                     }
                   }}
@@ -1209,8 +1219,14 @@ export default function POS({
 
               <button
                 id="dismiss-print-modal"
-                onClick={() => setPrintedInvoice(null)}
-                className="py-1.5.5 border border-slate-300 text-slate-705 bg-white hover:bg-slate-100 rounded-lg font-bold text-xs transition cursor-pointer text-center mt-1"
+                onClick={() => {
+                  setPrintedInvoice(null);
+                  const oldPrint = document.getElementById("print-section");
+                  if (oldPrint) oldPrint.remove();
+                  const oldStyle = document.getElementById("dynamic-page-style");
+                  if (oldStyle) oldStyle.remove();
+                }}
+                className="py-1.5 border border-slate-300 text-slate-705 bg-white hover:bg-slate-100 rounded-lg font-bold text-xs transition cursor-pointer text-center mt-1 w-full"
               >
                 Cerrar Ventana
               </button>
