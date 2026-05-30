@@ -61,8 +61,8 @@ const DEFAULT_USERS: AppUser[] = [
 ];
 
 export default function App() {
-  // Tabs: pos, inventory, clients, sales, admin
-  const [activeTab, setActiveTab] = useState<"pos" | "inventory" | "clients" | "sales" | "admin">("pos");
+  // Tabs: pos, inventory, clients, sales, admin, profile
+  const [activeTab, setActiveTab] = useState<"pos" | "inventory" | "clients" | "sales" | "admin" | "profile">("pos");
 
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -778,12 +778,28 @@ export default function App() {
             }}
             className={`py-3.5 px-4.5 text-xs font-black flex items-center gap-1.5 border-b-2 transition duration-150 shrink-0 uppercase cursor-pointer ${
               activeTab === "sales"
-                ? "border-emerald-600 text-emerald-700"
+                ? "border-emerald-600 text-emerald-700 font-black"
                 : "border-transparent text-slate-500 hover:text-slate-850 hover:border-slate-300"
             }`}
           >
             <History className="h-4 w-4" />
             Ventas y Cierre ({sales.length})
+          </button>
+
+          <button
+            id="tab-profile"
+            onClick={() => {
+              setActiveTab("profile");
+              setReprintSale(null);
+            }}
+            className={`py-3.5 px-4.5 text-xs font-black flex items-center gap-1.5 border-b-2 transition duration-150 shrink-0 uppercase cursor-pointer ${
+              activeTab === "profile"
+                ? "border-emerald-600 text-emerald-700 font-black"
+                : "border-transparent text-slate-500 hover:text-slate-850 hover:border-slate-300"
+            }`}
+          >
+            <UserCheck className="h-4 w-4" />
+            Mi Perfil 👤
           </button>
 
           {isCurrentUserAdmin && (
@@ -1163,6 +1179,82 @@ export default function App() {
                   })}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "profile" && (
+          <div className="space-y-6 animate-fade-in bg-white p-6 rounded-2xl border border-slate-200 shadow-xs max-w-2xl mx-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-150">
+                  <UserCheck className="h-6 w-6 stroke-[2]" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-black text-slate-900 uppercase tracking-tight">Perfil de mi Terminal</h2>
+                  <p className="text-xs text-slate-500 font-medium">Datos de tu cuenta autorizada y estado de licencia.</p>
+                </div>
+              </div>
+              <div className="p-1 px-2.5 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-lg text-[10px] font-black tracking-wider uppercase">
+                {liveUserState.email === "financieranova0@gmail.com" || liveUserState.email === "christheriault880@gmail.com" ? "👑 Administrativa" : "Licencia Activa"}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Correo de Inicio de Sesión</span>
+                <span className="text-sm font-extrabold text-slate-800 break-all">{liveUserState.email}</span>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Teléfono Registrado</span>
+                <span className="text-sm font-extrabold text-slate-800">{liveUserState.phone || "No requerido (Bypass)"}</span>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Suscripción Creada el</span>
+                <span className="text-sm font-extrabold text-slate-800 font-mono">
+                  {liveUserState.createdAt ? new Date(liveUserState.createdAt).toLocaleString() : "N/A"}
+                </span>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Licencia Vence el</span>
+                <span className="text-sm font-extrabold text-slate-800 font-mono">
+                  {liveUserState.expiresAt === "forever" ? "Ilimitada (De por vida) ♾️" : new Date(liveUserState.expiresAt).toLocaleString()}
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-xl p-4.5 flex gap-3 items-start">
+              <Sparkles className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="text-[11px] font-black text-emerald-800 uppercase tracking-wider block">Licencia Verificada y Segura</span>
+                <p className="text-xs text-slate-650 leading-relaxed font-sans">
+                  Tu terminal está autenticada correctamente en la plataforma de <b>Nova Facturación</b>. Se ha configurado el aislamiento completo de tus datos, por lo que tus productos, clientes y ventas registradas son 100% privadas y seguras.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
+              <button
+                id="profile-logout-btn"
+                onClick={handleLogout}
+                className="flex-1 py-3 px-4 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs transition duration-150 cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wider shadow-sm select-none"
+              >
+                <LogOut className="h-4.5 w-4.5 stroke-[2.5]" />
+                Cerrar Sesión Activa (Salir)
+              </button>
+              
+              <button
+                id="profile-system-restore-btn"
+                onClick={handleSystemRestoreDefault}
+                className="py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl font-extrabold text-xs transition duration-150 cursor-pointer flex items-center justify-center gap-1.5 uppercase tracking-wide select-none"
+                title="Borrador limpieza de caché"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Limpiar Datos de Sesión
+              </button>
             </div>
           </div>
         )}
