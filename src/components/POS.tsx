@@ -48,7 +48,8 @@ export default function POS({
   
   // Selected state
   const [selectedClientState, setSelectedClientState] = useState<Client | undefined>(undefined);
-  const selectedClient = selectedClientState || clients.find(c => c.id === "cli-generico") || clients[0] || {
+  const [customClientName, setCustomClientName] = useState("");
+  const selectedClient = selectedClientState || {
     id: "cli-generico",
     name: "Cliente Contado Genérico",
     currentDebt: 0,
@@ -251,6 +252,7 @@ export default function POS({
     setCart([]);
     setReceivedAmount("");
     setChangeAmount(null);
+    setCustomClientName("");
   };
 
   // Computations
@@ -345,7 +347,15 @@ export default function POS({
       subtotal,
       itbis,
       total,
-      client: selectedClient.id !== "cli-generico" ? selectedClient : undefined,
+      client: selectedClient.id !== "cli-generico"
+        ? selectedClient
+        : {
+            id: "cli-generico",
+            name: customClientName.trim() || "Cliente Contado Genérico",
+            phone: "N/A",
+            creditLimit: 0,
+            currentDebt: 0
+          },
       paymentMethod,
       ncfType,
       ncfCode,
@@ -805,18 +815,40 @@ export default function POS({
                 id="select-pos-client"
                 value={selectedClient.id}
                 onChange={(e) => {
-                  const targetClient = clients.find(c => c.id === e.target.value);
-                  if (targetClient) setSelectedClient(targetClient);
+                  if (e.target.value === "cli-generico") {
+                    setSelectedClientState(undefined);
+                    setCustomClientName("");
+                  } else {
+                    const targetClient = clients.find(c => c.id === e.target.value);
+                    if (targetClient) setSelectedClient(targetClient);
+                  }
                 }}
                 className="flex-1 text-xs bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
               >
-                {clients.map((c) => (
+                <option value="cli-generico">Cliente Contado (Genérico)</option>
+                {clients.filter(c => c.id !== "cli-generico").map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name} {c.currentDebt > 0 ? `(Debe: RD$${c.currentDebt})` : ""}
                   </option>
                 ))}
               </select>
             </div>
+
+            {selectedClient.id === "cli-generico" && (
+              <div className="mt-2 text-xs">
+                <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Nombre del Cliente para Factura (Opcional)
+                </label>
+                <input
+                  id="input-custom-client-name"
+                  type="text"
+                  placeholder="Ej: Juan Pérez"
+                  value={customClientName}
+                  onChange={(e) => setCustomClientName(e.target.value)}
+                  className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+                />
+              </div>
+            )}
 
             {/* If a credit-approved client is selected, show their ledger summary */}
             {selectedClient.id !== "cli-generico" && (
