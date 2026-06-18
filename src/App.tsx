@@ -98,10 +98,15 @@ export default function App() {
     return getBusinessConfig(currentUser?.email || "guest");
   }, [currentUser, reprintSale]);
 
-  // Initialize and load from local persistence (localStorage) per user
+  // Initialize and load from local persistence (localStorage) per user & Server
   useEffect(() => {
     try {
-      // Users control (system level)
+      // Check login (system level) first so we don't delay rendering
+      const loggedUser = localStorage.getItem("nova_facturacion_current_user");
+      if (loggedUser) {
+        setCurrentUser(JSON.parse(loggedUser));
+      }
+
       const storedUsers = localStorage.getItem("nova_facturacion_users");
       if (storedUsers) {
         setUsers(JSON.parse(storedUsers));
@@ -109,15 +114,40 @@ export default function App() {
         setUsers(DEFAULT_USERS);
         localStorage.setItem("nova_facturacion_users", JSON.stringify(DEFAULT_USERS));
       }
-
-      // Check login (system level)
-      const loggedUser = localStorage.getItem("nova_facturacion_current_user");
-      if (loggedUser) {
-        setCurrentUser(JSON.parse(loggedUser));
-      }
     } catch (e) {
       console.error("No se pudo cargar datos iniciales de login", e);
     }
+
+    // Now, fetch and continuously sync users from server
+    const fetchUsersFromServer = async () => {
+      try {
+        const res = await fetch("/api/users");
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.users)) {
+            setUsers(data.users);
+            localStorage.setItem("nova_facturacion_users", JSON.stringify(data.users));
+
+            // Keep current logged-in user state fully synchronized with the server-side state
+            const loggedUserStr = localStorage.getItem("nova_facturacion_current_user");
+            if (loggedUserStr) {
+              const currentLogged = JSON.parse(loggedUserStr);
+              const fresh = data.users.find((u: any) => u.email === currentLogged.email);
+              if (fresh) {
+                setCurrentUser(fresh);
+                localStorage.setItem("nova_facturacion_current_user", JSON.stringify(fresh));
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error synchronizing users list with server:", err);
+      }
+    };
+
+    fetchUsersFromServer();
+    const interval = setInterval(fetchUsersFromServer, 4500); // sync every 4.5 seconds for instant blocks
+    return () => clearInterval(interval);
   }, []);
 
   // Sync state whenever logged currentUser changes to support Isolation
@@ -268,7 +298,7 @@ export default function App() {
     }
   };
 
-  const saveUsersToStorage = (updatedUsers: AppUser[]) => {
+  const saveUsersToStorage = async (updatedUsers: AppUser[]) => {
     setUsers(updatedUsers);
     localStorage.setItem("nova_facturacion_users", JSON.stringify(updatedUsers));
     
@@ -279,6 +309,17 @@ export default function App() {
         setCurrentUser(freshCurrent);
         localStorage.setItem("nova_facturacion_current_user", JSON.stringify(freshCurrent));
       }
+    }
+
+    // Save to server database immediately for synchrony across sessions
+    try {
+      await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ users: updatedUsers })
+      });
+    } catch (e) {
+      console.error("Error saving users to full-stack server-side file:", e);
     }
   };
 
