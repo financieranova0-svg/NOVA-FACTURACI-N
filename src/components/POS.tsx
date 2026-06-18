@@ -49,6 +49,7 @@ export default function POS({
   // Selected state
   const [selectedClientState, setSelectedClientState] = useState<Client | undefined>(undefined);
   const [customClientName, setCustomClientName] = useState("");
+  const [invoiceNote, setInvoiceNote] = useState("");
   const selectedClient = selectedClientState || {
     id: "cli-generico",
     name: "Cliente Contado Genérico",
@@ -253,6 +254,7 @@ export default function POS({
     setReceivedAmount("");
     setChangeAmount(null);
     setCustomClientName("");
+    setInvoiceNote("");
   };
 
   // Computations
@@ -360,7 +362,8 @@ export default function POS({
       ncfType,
       ncfCode,
       receivedAmount: paymentMethod === "Efectivo" ? parseFloat(receivedAmount) : undefined,
-      changeAmount: paymentMethod === "Efectivo" && changeAmount !== null ? changeAmount : undefined
+      changeAmount: paymentMethod === "Efectivo" && changeAmount !== null ? changeAmount : undefined,
+      note: invoiceNote.trim() || undefined
     };
 
     // Trigger state callbacks
@@ -850,6 +853,20 @@ export default function POS({
               </div>
             )}
 
+            <div className="mt-2 text-xs">
+              <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Detalle de Factura / Mensaje Adicional (Opcional)
+              </label>
+              <input
+                id="input-invoice-note"
+                type="text"
+                placeholder="Ej: Garantía 6 meses / Nota especial"
+                value={invoiceNote}
+                onChange={(e) => setInvoiceNote(e.target.value)}
+                className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+              />
+            </div>
+
             {/* If a credit-approved client is selected, show their ledger summary */}
             {selectedClient.id !== "cli-generico" && (
               <div className="mt-2 grid grid-cols-3 bg-emerald-50/40 p-2 rounded-lg border border-emerald-100/50 text-[10px]">
@@ -1145,6 +1162,13 @@ export default function POS({
                 <div className="flex justify-between text-[9px] font-bold">
                   <span>Devuelto (Cambio):</span>
                   <span>RD${printedInvoice.changeAmount.toFixed(0)}</span>
+                </div>
+              )}
+
+              {printedInvoice.note && (
+                <div className="border-t border-dashed border-slate-300 pt-1.5 text-[8.5px] text-slate-600 bg-slate-100/55 p-1 rounded">
+                  <span className="font-bold block uppercase text-[8px] text-slate-500 mb-0.5">Nota o Detalle de Venta:</span>
+                  <p className="font-sans leading-relaxed text-slate-705 not-italic">{printedInvoice.note}</p>
                 </div>
               )}
 

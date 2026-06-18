@@ -42,6 +42,7 @@ export interface Sale {
   ncfCode?: string; // E.g., B0200000123
   receivedAmount?: number;
   changeAmount?: number;
+  note?: string;
 }
 
 export interface PaymentRecord {

@@ -33,6 +33,7 @@ import POS from "./components/POS";
 import Inventory from "./components/Inventory";
 import Clients from "./components/Clients";
 import SalesHistory from "./components/SalesHistory";
+import Receipts from "./components/Receipts";
 import { generateInvoicePDF, getBusinessConfig, BusinessConfig } from "./utils/pdfGenerator";
 
 const DEFAULT_USERS: AppUser[] = [
@@ -61,8 +62,8 @@ const DEFAULT_USERS: AppUser[] = [
 ];
 
 export default function App() {
-  // Tabs: pos, inventory, clients, sales, admin, profile
-  const [activeTab, setActiveTab] = useState<"pos" | "inventory" | "clients" | "sales" | "admin" | "profile">("pos");
+  // Tabs: pos, inventory, clients, sales, admin, profile, receipts
+  const [activeTab, setActiveTab] = useState<"pos" | "inventory" | "clients" | "sales" | "admin" | "profile" | "receipts">("pos");
 
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -787,6 +788,22 @@ export default function App() {
           </button>
 
           <button
+            id="tab-receipts"
+            onClick={() => {
+              setActiveTab("receipts");
+              setReprintSale(null);
+            }}
+            className={`py-3.5 px-4.5 text-xs font-black flex items-center gap-1.5 border-b-2 transition duration-150 shrink-0 uppercase cursor-pointer ${
+              activeTab === "receipts"
+                ? "border-emerald-600 text-emerald-700 font-black"
+                : "border-transparent text-slate-500 hover:text-slate-850 hover:border-slate-300"
+            }`}
+          >
+            <Receipt className="h-4 w-4" />
+            Recibos de Pago 🧾
+          </button>
+
+          <button
             id="tab-profile"
             onClick={() => {
               setActiveTab("profile");
@@ -1258,6 +1275,14 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {activeTab === "receipts" && (
+          <Receipts
+            currentUser={currentUser}
+            clients={clients}
+            products={products}
+          />
+        )}
       </main>
 
       {/* Unified reprint simulated overlay model with Multi-format capability, WhatsApp & PDF formats */}
@@ -1377,6 +1402,13 @@ export default function App() {
                   <div className="border-t border-dashed border-slate-350 pt-1 text-[9px] font-bold">
                     <span>CONDICIÓN: {reprintSale.paymentMethod.toUpperCase()}</span>
                   </div>
+
+                  {reprintSale.note && (
+                    <div className="border-t border-dashed border-slate-350 pt-1.5 text-[8.5px] text-slate-600 bg-slate-100/50 p-1 rounded">
+                      <span className="font-bold block uppercase text-[8px] text-slate-500 mb-0.5">Nota o Detalle de Venta:</span>
+                      <p className="font-sans leading-relaxed text-slate-700 not-italic">{reprintSale.note}</p>
+                    </div>
+                  )}
                   <div className="text-center text-[7.5px] text-slate-400 pt-3 uppercase tracking-wider">
                     *** GRACIAS POR PREFERIRNOS ***
                   </div>
@@ -1473,6 +1505,13 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {reprintSale.note && (
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded text-[10px] text-slate-700 text-left">
+                      <span className="font-bold block uppercase text-[8.5px] text-slate-500 mb-0.5">Detalle / Nota de Facturación:</span>
+                      <p className="text-slate-800 leading-relaxed font-sans">{reprintSale.note}</p>
+                    </div>
+                  )}
 
                   {/* Signatures */}
                   <div className="grid grid-cols-2 gap-4.5 pt-6 text-center text-[9px] text-slate-400">

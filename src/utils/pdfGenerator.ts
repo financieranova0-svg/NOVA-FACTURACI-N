@@ -151,6 +151,15 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
     doc.setFontSize(7.5);
     doc.text(`CONDICIÓN: ${sale.paymentMethod.toUpperCase()}`, 5, y);
 
+    if (sale.note) {
+      y += 4.5;
+      doc.setFont("courier", "bold");
+      doc.text("OBSERVACIÓN COMPRA:", 5, y);
+      y += 4;
+      doc.setFont("courier", "normal");
+      doc.text(sale.note.substring(0, 36).toUpperCase(), 5, y);
+    }
+
     y += 8;
     doc.text("*** GRACIAS POR PREFERIRNOS ***", 40, y, { align: "center" });
     y += 4;
@@ -316,15 +325,31 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
 
     // Conditional info e.g. change info
     if (sale.receivedAmount !== undefined && sale.changeAmount !== undefined) {
-      currentY += 19;
+      currentY += 16;
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       doc.setTextColor(100, 116, 139);
       doc.text(`Efectivo Recibido: RD$ ${sale.receivedAmount.toFixed(0)} | Devuelto: RD$ ${sale.changeAmount.toFixed(0)}`, 193, currentY, { align: "right" });
+    } else {
+      currentY += 10;
+    }
+
+    if (sale.note) {
+      currentY += 6;
+      doc.setFillColor(245, 247, 250);
+      doc.roundedRect(15, currentY, 180, 10, 1, 1, "F");
+      
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(7.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`DETALLE / OBSERVACIÓN COMPRADOR: ${sale.note.toUpperCase()}`, 18, currentY + 6.5);
+      currentY += 10;
+    } else {
+      currentY += 4;
     }
 
     // Terms note
-    currentY += 12;
+    currentY += 4;
     doc.setFillColor(248, 250, 252);
     doc.roundedRect(15, currentY, 180, 12, 1, 1, "F");
     doc.setFont("helvetica", "oblique");
