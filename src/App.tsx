@@ -132,6 +132,10 @@ export default function App() {
 
     // Now, fetch and continuously sync users from server
     const fetchUsersFromServer = async () => {
+      // Si estamos offline o iniciamos en modo Escritorio Electronico 100% Sin Internet, evitamos llamados innecesarios al servidor web
+      if (typeof window !== "undefined" && (!window.navigator.onLine || (window as any).electronAPI)) {
+        return;
+      }
       try {
         const res = await fetch("/api/users");
         if (res.ok) {
@@ -349,6 +353,9 @@ export default function App() {
     }
 
     // Save to server database immediately for synchrony across sessions
+    if (typeof window !== "undefined" && (!window.navigator.onLine || (window as any).electronAPI)) {
+      return;
+    }
     try {
       const res = await fetch("/api/users", {
         method: "POST",
@@ -488,6 +495,11 @@ export default function App() {
     setAuthMessage(""); // Limpiar mensaje de error previo
 
     try {
+      const isOfflineMode = typeof window !== "undefined" && (!window.navigator.onLine || (window as any).electronAPI);
+      if (isOfflineMode) {
+        throw new Error("Modo Escritorio Offline Activo");
+      }
+
       const response = await fetch("/api/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -3,12 +3,41 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "electron.cjs",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "electron:start": "electron .",
+    "electron:dev": "cross-env ELECTRON_DEV=true electron .",
+    "electron:pack": "vite build && electron-builder --dir",
+    "electron:dist": "vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.financialnova.novafacturacion",
+    "productName": "Nova Facturacion",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "dist/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Nova Facturacion"
+    }
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -28,6 +57,9 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
+    "cross-env": "^10.1.0",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
