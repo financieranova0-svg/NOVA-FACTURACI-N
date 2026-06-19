@@ -132,7 +132,7 @@ export default function App() {
             const loggedUserStr = localStorage.getItem("nova_facturacion_current_user");
             if (loggedUserStr) {
               const currentLogged = JSON.parse(loggedUserStr);
-              const fresh = data.users.find((u: any) => u.email === currentLogged.email);
+              const fresh = data.users.find((u: any) => u.email.toLowerCase() === currentLogged.email.toLowerCase());
               if (fresh) {
                 setCurrentUser(fresh);
                 localStorage.setItem("nova_facturacion_current_user", JSON.stringify(fresh));
@@ -304,7 +304,7 @@ export default function App() {
     
     // Also synchronize the current logged in user state if they are in the list
     if (currentUser) {
-      const freshCurrent = updatedUsers.find((u) => u.email === currentUser.email);
+      const freshCurrent = updatedUsers.find((u) => u.email.toLowerCase() === currentUser.email.toLowerCase());
       if (freshCurrent) {
         setCurrentUser(freshCurrent);
         localStorage.setItem("nova_facturacion_current_user", JSON.stringify(freshCurrent));
@@ -313,11 +313,24 @@ export default function App() {
 
     // Save to server database immediately for synchrony across sessions
     try {
-      await fetch("/api/users", {
+      const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ users: updatedUsers })
+        body: JSON.stringify({ users: updatedUsers, updatedBy: currentUser?.email })
       });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.users)) {
+          // Update local states with the secure merged truth from server
+          setUsers(data.users);
+          localStorage.setItem("nova_facturacion_users", JSON.stringify(data.users));
+          if (currentUser) {
+            const freshCurrent = data.users.find((u: any) => u.email.toLowerCase() === currentUser.email.toLowerCase()) || currentUser;
+            setCurrentUser(freshCurrent);
+            localStorage.setItem("nova_facturacion_current_user", JSON.stringify(freshCurrent));
+          }
+        }
+      }
     } catch (e) {
       console.error("Error saving users to full-stack server-side file:", e);
     }
@@ -428,83 +441,45 @@ export default function App() {
     saveClosuresToStorage(updated);
   };
 
-  const handleAuthSubmit = () => {
+  const handleAuthSubmit = async () => {
     const email = authEmail.trim().toLowerCase();
     if (!email) {
       setAuthMessage("Por favor ingresa un correo electrónico válido.");
       return;
     }
 
-    // Check if user exists in database
-    let existingUser = users.find((u) => u.email === email);
+    setAuthMessage(""); // Limpiar mensaje de error previo
 
-    if (existingUser) {
-      // Check if user requires activation of phone but hasn't entered it
-      if (!existingUser.bypassPhone && !existingUser.phone) {
-        const phone = authPhone.trim();
-        if (!phone) {
-          setAuthMessage("Esta cuenta requiere un número de celular para enlace seguro.");
-          return;
-        }
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, phone: authPhone.trim() })
+      });
 
-        // Verify duplicate phone limit (no reuse)
-        const phoneRegistered = users.some((u) => u.email !== email && u.phone === phone);
-        if (phoneRegistered) {
-          setAuthMessage("🚨 Error: Este número telefónico ya está vinculado a otra licencia.");
-          return;
-        }
-
-        existingUser.phone = phone;
-        const updatedUsers = users.map((u) => u.email === email ? existingUser! : u);
-        saveUsersToStorage(updatedUsers);
-      }
-    } else {
-      // Create new user account registration on-the-fly!
-      const phone = authPhone.trim();
-      const isAdminEmail = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
-      const needsPhone = !isAdminEmail;
-      
-      if (needsPhone && !phone) {
-        setAuthMessage("Ingresa tu número de celular para activar tu licencia de prueba.");
+      if (!response.ok) {
+        const errData = await response.json();
+        setAuthMessage(errData.error || "Ocurrió un error al iniciar sesión.");
         return;
       }
 
-      if (needsPhone) {
-        // Verify duplicate phone limit (no reuse)
-        const phoneRegistered = users.some((u) => u.phone === phone);
-        if (phoneRegistered) {
-          setAuthMessage("🚨 Error: Este teléfono ya está registrado en otra licencia activa.");
-          return;
-        }
+      const data = await response.json();
+      if (data && data.success && data.user) {
+        // Guardar usuarios y usuario actual de forma segura y sincronizada
+        setUsers(data.users);
+        localStorage.setItem("nova_facturacion_users", JSON.stringify(data.users));
+
+        localStorage.setItem("nova_facturacion_current_user", JSON.stringify(data.user));
+        setCurrentUser(data.user);
+        setAuthMessage("");
+        setActiveTab("pos");
+      } else {
+        setAuthMessage("No se pudo completar el proceso de autenticación.");
       }
-
-      existingUser = {
-        email,
-        phone: needsPhone ? phone : undefined,
-        bypassPhone: !needsPhone,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 day trial automatically
-        status: "active"
-      };
-
-      const updatedUsers = [...users, existingUser];
-      saveUsersToStorage(updatedUsers);
+    } catch (err) {
+      console.error("Error durante el llamado de autenticación unificada:", err);
+      setAuthMessage("Error de conexión con el servidor de licencias.");
     }
-
-    // Check suspension or expiration
-    const nowLocal = new Date();
-    const isExpired = existingUser.expiresAt !== "forever" && nowLocal > new Date(existingUser.expiresAt);
-    
-    if (existingUser.status === "suspended" || isExpired) {
-      // Keep state logged in but let them know it's locked
-      // We will render locked screen
-    }
-
-    // Persist login state
-    localStorage.setItem("nova_facturacion_current_user", JSON.stringify(existingUser));
-    setCurrentUser(existingUser);
-    setAuthMessage("");
-    setActiveTab("pos");
   };
 
   const handleLogout = () => {
@@ -643,9 +618,10 @@ export default function App() {
   }
 
   // Check if current user is Suspended or has Expired in local list state
-  const liveUserState = users.find((u) => u.email === currentUser.email) || currentUser;
-  const isExpired = liveUserState.expiresAt !== "forever" && new Date() > new Date(liveUserState.expiresAt);
-  const isSuspended = liveUserState.status === "suspended";
+  const liveUserState = users.find((u) => u.email.toLowerCase() === currentUser.email.toLowerCase()) || currentUser;
+  const isCurrentUserAdmin = liveUserState.email.toLowerCase() === "financieranova0@gmail.com" || liveUserState.email.toLowerCase() === "christheriault880@gmail.com";
+  const isExpired = !isCurrentUserAdmin && liveUserState.expiresAt !== "forever" && new Date() > new Date(liveUserState.expiresAt);
+  const isSuspended = !isCurrentUserAdmin && liveUserState.status === "suspended";
 
   // Lock Page if account is expired or suspended
   if (isSuspended || isExpired) {
@@ -695,9 +671,9 @@ export default function App() {
 
           <div className="flex gap-2.5">
             <button
-              id="expired-logout-btn"
-              onClick={handleLogout}
-              className="flex-1 py-2 bg-slate-800 hover:bg-slate-705 border border-slate-700 text-white rounded-lg font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5 uppercase tracking-wider"
+               id="expired-logout-btn"
+               onClick={handleLogout}
+               className="flex-1 py-2 bg-slate-800 hover:bg-slate-705 border border-slate-700 text-white rounded-lg font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5 uppercase tracking-wider"
             >
               <LogOut className="h-4 w-4" />
               Cambiar Cuenta o Salir
@@ -707,9 +683,6 @@ export default function App() {
       </div>
     );
   }
-
-  // Admin tab is allowed if user is authorized email addresses
-  const isCurrentUserAdmin = liveUserState.email === "financieranova0@gmail.com" || liveUserState.email === "christheriault880@gmail.com";
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
@@ -940,68 +913,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Simulated actions add new user on the fly */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4.5 bg-slate-50 p-4 rounded-xl border border-slate-200">
-              <div className="space-y-1">
-                <label className="text-[10px] font-extrabold uppercase text-slate-550">Registrar Nuevo Correo Cliente</label>
-                <input
-                  id="admin-new-email"
-                  type="email"
-                  placeholder="ejemplo-correo@gmail.com"
-                  className="w-full bg-white border border-slate-250 p-1.5 px-2.5 rounded text-xs text-slate-800"
-                />
-              </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] font-extrabold uppercase text-slate-550">Celular Opcional</label>
-                <input
-                  id="admin-new-phone"
-                  type="tel"
-                  placeholder="809-555-0199"
-                  className="w-full bg-white border border-slate-250 p-1.5 px-2.5 rounded text-xs text-slate-800"
-                />
-              </div>
-
-              <div className="space-y-1 flex flex-col justify-end">
-                <button
-                  id="admin-btn-register"
-                  onClick={() => {
-                    const elEmail = document.getElementById("admin-new-email") as HTMLInputElement;
-                    const elPhone = document.getElementById("admin-new-phone") as HTMLInputElement;
-                    const eText = elEmail?.value.trim().toLowerCase();
-                    const pText = elPhone?.value.trim();
-
-                    if (!eText) {
-                      alert("Por favor ingresa un correo electrónico.");
-                      return;
-                    }
-
-                    if (users.some((u) => u.email === eText)) {
-                      alert("Este correo ya está registrado.");
-                      return;
-                    }
-
-                    const newUser: AppUser = {
-                      email: eText,
-                      phone: pText || undefined,
-                      bypassPhone: !pText,
-                      createdAt: new Date().toISOString(),
-                      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-                      status: "active"
-                    };
-
-                    const updated = [...users, newUser];
-                    saveUsersToStorage(updated);
-                    alert("¡Cliente registrado correctamente!");
-                    elEmail.value = "";
-                    elPhone.value = "";
-                  }}
-                  className="w-full py-1.5.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded transition uppercase cursor-pointer"
-                >
-                  Registrar Licencia
-                </button>
-              </div>
-            </div>
 
             {/* Registered users datatable list */}
             <div className="overflow-x-auto mt-4">

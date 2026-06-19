@@ -70,14 +70,117 @@ async function startServer() {
     res.json({ users });
   });
 
-  app.post("/api/users", (req, res) => {
-    const { users } = req.body;
-    if (Array.isArray(users)) {
-      writeUsers(users);
-      res.json({ success: true, users });
-    } else {
-      res.status(400).json({ error: "Invalid users array format" });
+  app.post("/api/auth", (req, res) => {
+    const { email: rawEmail, phone: rawPhone } = req.body;
+    if (!rawEmail) {
+      return res.status(400).json({ error: "El correo electrónico es requerido." });
     }
+
+    const email = rawEmail.trim().toLowerCase();
+    const phone = rawPhone ? rawPhone.trim() : "";
+    const currentUsers = readUsers();
+
+    let user = currentUsers.find((u: any) => u.email && u.email.toLowerCase() === email);
+
+    if (!user) {
+      // Registrar un nuevo usuario
+      const isAdminEmail = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
+      const needsPhone = !isAdminEmail;
+
+      if (needsPhone && !phone) {
+        return res.status(400).json({ error: "Se requiere un número de celular para activar la licencia." });
+      }
+
+      if (needsPhone) {
+        const phoneRegistered = currentUsers.some((u: any) => u.phone === phone);
+        if (phoneRegistered) {
+          return res.status(400).json({ error: "Este número telefónico ya está registrado en otra licencia activa." });
+        }
+      }
+
+      user = {
+        email,
+        phone: needsPhone ? phone : undefined,
+        bypassPhone: !needsPhone,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30-day trial automatically
+        status: "active"
+      };
+
+      currentUsers.push(user);
+      writeUsers(currentUsers);
+    } else {
+      // El usuario ya existe, actualizar teléfono si lo necesita y se proporciona
+      if (!user.bypassPhone && !user.phone && phone) {
+        // Verificar duplicados de teléfono
+        const phoneRegistered = currentUsers.some((u: any) => u.email && u.email.toLowerCase() !== email && u.phone === phone);
+        if (phoneRegistered) {
+          return res.status(400).json({ error: "Este número de teléfono ya está registrado en otra licencia activa." });
+        }
+        user.phone = phone;
+        writeUsers(currentUsers);
+      }
+    }
+
+    res.json({ success: true, user, users: currentUsers });
+  });
+
+  app.post("/api/users", (req, res) => {
+    const { users: incomingUsers, updatedBy } = req.body;
+    if (!Array.isArray(incomingUsers)) {
+      return res.status(400).json({ error: "Invalid users array format" });
+    }
+
+    const currentUsers = readUsers();
+    const isAdmin = updatedBy === "financieranova0@gmail.com" || updatedBy === "christheriault880@gmail.com";
+
+    // Use a Map to catalog current users by lowercase email
+    const mergedMap = new Map<string, any>();
+    for (const u of currentUsers) {
+      if (u && u.email) {
+        mergedMap.set(u.email.toLowerCase(), { ...u });
+      }
+    }
+
+    // Safely upsert/merge incoming users
+    for (const incoming of incomingUsers) {
+      if (!incoming || !incoming.email) continue;
+      const key = incoming.email.toLowerCase();
+
+      if (!mergedMap.has(key)) {
+        // Brand new registration
+        mergedMap.set(key, {
+          email: incoming.email,
+          phone: incoming.phone,
+          bypassPhone: incoming.bypassPhone || false,
+          createdAt: incoming.createdAt || new Date().toISOString(),
+          expiresAt: incoming.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          status: incoming.status || "active"
+        });
+      } else {
+        // User already exists
+        const existing = mergedMap.get(key);
+        if (isAdmin) {
+          // Admin can change everything
+          mergedMap.set(key, {
+            ...existing,
+            ...incoming
+          });
+        } else {
+          // Non-admin can only update general fields, NOT license state
+          mergedMap.set(key, {
+            ...incoming,
+            status: existing.status,
+            expiresAt: existing.expiresAt,
+            bypassPhone: existing.bypassPhone
+          });
+        }
+      }
+    }
+
+    const finalUsers = Array.from(mergedMap.values());
+    writeUsers(finalUsers);
+    res.json({ success: true, users: finalUsers });
   });
 
   // Vite middleware integration for development
