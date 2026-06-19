@@ -77,24 +77,31 @@ async function startServer() {
     }
 
     const email = rawEmail.trim().toLowerCase();
-    const phone = rawPhone ? rawPhone.trim() : "";
+    const phone = rawPhone ? rawPhone.trim().replace(/\D/g, "") : ""; // Normalizar número removiendo guiones o espacios
     const currentUsers = readUsers();
 
+    // Check if user already exists
     let user = currentUsers.find((u: any) => u.email && u.email.toLowerCase() === email);
 
-    if (!user) {
-      // Registrar un nuevo usuario
-      const isAdminEmail = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
-      const needsPhone = !isAdminEmail;
+    const isAdminEmail = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
+    const needsPhone = !isAdminEmail;
 
+    if (!user) {
+      // Registrar un nuevo usuario (primera vez)
       if (needsPhone && !phone) {
-        return res.status(400).json({ error: "Se requiere un número de celular para activar la licencia." });
+        return res.status(400).json({ error: "Se requiere un número de celular para activar tu licencia de prueba." });
       }
 
       if (needsPhone) {
-        const phoneRegistered = currentUsers.some((u: any) => u.phone === phone);
+        // Verificar que ningún usuario tenga ya este teléfono registrado
+        const phoneRegistered = currentUsers.some((u: any) => {
+          if (!u.phone) return false;
+          const pNorm = u.phone.trim().replace(/\D/g, "");
+          return pNorm === phone;
+        });
+
         if (phoneRegistered) {
-          return res.status(400).json({ error: "Este número telefónico ya está registrado en otra licencia activa." });
+          return res.status(400).json({ error: "Este número de celular ya está vinculado a otra licencia activa." });
         }
       }
 
@@ -103,22 +110,40 @@ async function startServer() {
         phone: needsPhone ? phone : undefined,
         bypassPhone: !needsPhone,
         createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30-day trial automatically
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // Prueba de 30 días automática
         status: "active"
       };
 
       currentUsers.push(user);
       writeUsers(currentUsers);
     } else {
-      // El usuario ya existe, actualizar teléfono si lo necesita y se proporciona
-      if (!user.bypassPhone && !user.phone && phone) {
-        // Verificar duplicados de teléfono
-        const phoneRegistered = currentUsers.some((u: any) => u.email && u.email.toLowerCase() !== email && u.phone === phone);
-        if (phoneRegistered) {
-          return res.status(400).json({ error: "Este número de teléfono ya está registrado en otra licencia activa." });
+      // El usuario ya existe en la base de datos (retorno)
+      if (needsPhone) {
+        if (!phone) {
+          return res.status(400).json({ error: "Ingrese su celular registrado para iniciar sesión." });
         }
-        user.phone = phone;
-        writeUsers(currentUsers);
+
+        // Si ya tiene un teléfono registrado, el número ingresado debe coincidir
+        if (user.phone) {
+          const userPhoneNorm = user.phone.trim().replace(/\D/g, "");
+          if (userPhoneNorm !== phone) {
+            return res.status(400).json({ error: "El celular ingresado no coincide con el registrado para esta cuenta." });
+          }
+        } else {
+          // Si por alguna razón no tenía teléfono registrado (ejemplo: admin manual), vincularlo de forma segura
+          const phoneRegistered = currentUsers.some((u: any) => {
+            if (u.email && u.email.toLowerCase() === email) return false;
+            if (!u.phone) return false;
+            const pNorm = u.phone.trim().replace(/\D/g, "");
+            return pNorm === phone;
+          });
+
+          if (phoneRegistered) {
+            return res.status(400).json({ error: "Este número telefónico ya está registrado en otra licencia activa." });
+          }
+          user.phone = phone;
+          writeUsers(currentUsers);
+        }
       }
     }
 
@@ -132,7 +157,10 @@ async function startServer() {
     }
 
     const currentUsers = readUsers();
-    const isAdmin = updatedBy === "financieranova0@gmail.com" || updatedBy === "christheriault880@gmail.com";
+    const isAdmin = updatedBy && (
+      updatedBy.toLowerCase() === "financieranova0@gmail.com" || 
+      updatedBy.toLowerCase() === "christheriault880@gmail.com"
+    );
 
     // Use a Map to catalog current users by lowercase email
     const mergedMap = new Map<string, any>();
@@ -151,7 +179,7 @@ async function startServer() {
         // Brand new registration
         mergedMap.set(key, {
           email: incoming.email,
-          phone: incoming.phone,
+          phone: incoming.phone ? incoming.phone.trim().replace(/\D/g, "") : undefined,
           bypassPhone: incoming.bypassPhone || false,
           createdAt: incoming.createdAt || new Date().toISOString(),
           expiresAt: incoming.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -164,12 +192,14 @@ async function startServer() {
           // Admin can change everything
           mergedMap.set(key, {
             ...existing,
-            ...incoming
+            ...incoming,
+            phone: incoming.phone ? incoming.phone.trim().replace(/\D/g, "") : existing.phone
           });
         } else {
           // Non-admin can only update general fields, NOT license state
           mergedMap.set(key, {
             ...incoming,
+            phone: incoming.phone ? incoming.phone.trim().replace(/\D/g, "") : existing.phone,
             status: existing.status,
             expiresAt: existing.expiresAt,
             bypassPhone: existing.bypassPhone

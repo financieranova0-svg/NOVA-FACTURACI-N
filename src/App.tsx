@@ -950,7 +950,7 @@ export default function App() {
                             disabled={isSystemAdmin}
                             onClick={() => {
                               const updated = users.map((uItem) => {
-                                if (uItem.email === u.email) {
+                                if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
                                   return { ...uItem, bypassPhone: !uItem.bypassPhone };
                                 }
                                 return uItem;
@@ -1009,7 +1009,7 @@ export default function App() {
                                   disabled={isSystemAdmin}
                                   onClick={() => {
                                     const updated = users.map((uItem) => {
-                                      if (uItem.email === u.email) {
+                                      if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
                                         return { ...uItem, status: "active" as const };
                                       }
                                       return uItem;
@@ -1028,7 +1028,7 @@ export default function App() {
                                   disabled={isSystemAdmin}
                                   onClick={() => {
                                     const updated = users.map((uItem) => {
-                                      if (uItem.email === u.email) {
+                                      if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
                                         return { ...uItem, status: "suspended" as const };
                                       }
                                       return uItem;
@@ -1049,7 +1049,7 @@ export default function App() {
                                 disabled={isSystemAdmin}
                                 onClick={() => {
                                   const updated = users.map((uItem) => {
-                                    if (uItem.email === u.email) {
+                                    if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
                                       return { 
                                         ...uItem, 
                                         expiresAt: new Date(Date.now() - 60000).toISOString() 
@@ -1072,7 +1072,7 @@ export default function App() {
                                 disabled={isSystemAdmin}
                                 onClick={() => {
                                   const updated = users.map((uItem) => {
-                                    if (uItem.email === u.email) {
+                                    if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
                                       const base = uItem.expiresAt === "forever" || new Date(uItem.expiresAt) < new Date()
                                         ? Date.now() 
                                         : new Date(uItem.expiresAt).getTime();
@@ -1099,7 +1099,7 @@ export default function App() {
                                 disabled={isSystemAdmin}
                                 onClick={() => {
                                   const updated = users.map((uItem) => {
-                                    if (uItem.email === u.email) {
+                                    if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
                                       return { ...uItem, expiresAt: "forever", status: "active" as const };
                                     }
                                     return uItem;
@@ -1127,7 +1127,7 @@ export default function App() {
                                   if (!selectVal) return;
                                   const parsedDate = new Date(selectVal + "T23:59:59");
                                   const updated = users.map((uItem) => {
-                                    if (uItem.email === u.email) {
+                                    if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
                                       return {
                                         ...uItem,
                                         expiresAt: parsedDate.toISOString(),
