@@ -89,8 +89,21 @@ async function startServer() {
 
       if (!user) {
         // Registrar un nuevo usuario (primera vez)
-        if (needsPhone && !phone) {
-          return res.status(400).json({ error: "Se requiere un número de celular para activar tu licencia de prueba." });
+        if (needsPhone) {
+          if (!phone) {
+            return res.status(400).json({ error: "Se requiere un número de celular para activar tu licencia de prueba." });
+          }
+
+          // Verificar que el celular no esté repetido
+          const isPhoneTaken = currentUsers.some((u: any) => {
+            if (!u.phone) return false;
+            const norm = String(u.phone).trim().replace(/\D/g, "");
+            return norm === phone;
+          });
+
+          if (isPhoneTaken) {
+            return res.status(400).json({ error: "Este número de celular ya está registrado. Use otro correo y celular para registrar una cuenta nueva." });
+          }
         }
 
         user = {
@@ -105,15 +118,34 @@ async function startServer() {
         currentUsers.push(user);
         writeUsers(currentUsers);
       } else {
-        // El usuario ya existe en la base de datos (retorno)
+        // El usuario ya existe, iniciar sesión
         if (needsPhone) {
           if (!phone) {
             return res.status(400).json({ error: "Ingrese su celular registrado para iniciar sesión." });
           }
 
-          // Sincronizar o actualizar libremente el número de teléfono
-          user.phone = phone;
-          writeUsers(currentUsers);
+          // El celular debe coincidir exactamente con el celular registrado
+          const existingPhoneNorm = user.phone ? String(user.phone).trim().replace(/\D/g, "") : "";
+          if (existingPhoneNorm && existingPhoneNorm !== phone) {
+            return res.status(400).json({ error: "El número de celular ingresado no coincide con el registrado para esta cuenta." });
+          }
+
+          if (!existingPhoneNorm) {
+            // Si estaba vacío, asociarlo asegurándose de que es único
+            const isPhoneTaken = currentUsers.some((u: any) => {
+              if (String(u.email).toLowerCase() === email) return false;
+              if (!u.phone) return false;
+              const norm = String(u.phone).trim().replace(/\D/g, "");
+              return norm === phone;
+            });
+
+            if (isPhoneTaken) {
+              return res.status(400).json({ error: "Este número de celular ya está registrado en otra cuenta activa." });
+            }
+
+            user.phone = phone;
+            writeUsers(currentUsers);
+          }
         }
       }
 
@@ -137,7 +169,64 @@ async function startServer() {
         String(updatedBy).toLowerCase() === "christheriault880@gmail.com"
       );
 
-      // Use a Map to catalog current users by lowercase email
+      if (isAdmin) {
+        // El administrador tiene autoridad absoluta de reemplazo (para poder borrar, suspender, etc. de inmediato)
+        const systemAdmins = [
+          {
+            email: "financieranova0@gmail.com",
+            bypassPhone: true,
+            createdAt: new Date().toISOString(),
+            expiresAt: "forever",
+            status: "active"
+          },
+          {
+            email: "christheriault880@gmail.com",
+            bypassPhone: true,
+            createdAt: new Date().toISOString(),
+            expiresAt: "forever",
+            status: "active"
+          }
+        ];
+
+        const finalUsers: any[] = [];
+
+        // Asegurar que los administradores del sistema siempre existan en el listado y no sean removidos por error
+        systemAdmins.forEach(admin => {
+          const incomingAdmin = incomingUsers.find((u: any) => u && u.email && u.email.toLowerCase() === admin.email);
+          if (incomingAdmin) {
+            finalUsers.push({
+              ...admin,
+              ...incomingAdmin,
+              expiresAt: "forever",
+              status: "active"
+            });
+          } else {
+            finalUsers.push(admin);
+          }
+        });
+
+        // Mutar y agregar el resto de usuarios entrantes
+        incomingUsers.forEach((u: any) => {
+          if (!u || !u.email) return;
+          const emailLower = u.email.toLowerCase();
+          const isSysAdmin = emailLower === "financieranova0@gmail.com" || emailLower === "christheriault880@gmail.com";
+          if (!isSysAdmin) {
+            finalUsers.push({
+              email: u.email.toLowerCase().trim(),
+              phone: u.phone ? String(u.phone).trim().replace(/\D/g, "") : undefined,
+              bypassPhone: u.bypassPhone || false,
+              createdAt: u.createdAt || new Date().toISOString(),
+              expiresAt: u.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+              status: u.status || "active"
+            });
+          }
+        });
+
+        writeUsers(finalUsers);
+        return res.json({ success: true, users: finalUsers });
+      }
+
+      // No es admin, aplicar merge tradicional limitado
       const mergedMap = new Map<string, any>();
       for (const u of currentUsers) {
         if (u && u.email) {
@@ -145,13 +234,11 @@ async function startServer() {
         }
       }
 
-      // Safely upsert/merge incoming users
       for (const incoming of incomingUsers) {
         if (!incoming || !incoming.email) continue;
         const key = String(incoming.email).toLowerCase();
 
         if (!mergedMap.has(key)) {
-          // Brand new registration
           mergedMap.set(key, {
             email: incoming.email,
             phone: incoming.phone ? String(incoming.phone).trim().replace(/\D/g, "") : undefined,
@@ -161,25 +248,14 @@ async function startServer() {
             status: incoming.status || "active"
           });
         } else {
-          // User already exists
           const existing = mergedMap.get(key);
-          if (isAdmin) {
-            // Admin can change everything
-            mergedMap.set(key, {
-              ...existing,
-              ...incoming,
-              phone: incoming.phone ? String(incoming.phone).trim().replace(/\D/g, "") : existing.phone
-            });
-          } else {
-            // Non-admin can only update general fields, NOT license state
-            mergedMap.set(key, {
-              ...incoming,
-              phone: incoming.phone ? String(incoming.phone).trim().replace(/\D/g, "") : existing.phone,
-              status: existing.status,
-              expiresAt: existing.expiresAt,
-              bypassPhone: existing.bypassPhone
-            });
-          }
+          mergedMap.set(key, {
+            ...incoming,
+            phone: incoming.phone ? String(incoming.phone).trim().replace(/\D/g, "") : existing.phone,
+            status: existing.status,
+            expiresAt: existing.expiresAt,
+            bypassPhone: existing.bypassPhone
+          });
         }
       }
 

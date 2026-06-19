@@ -137,14 +137,16 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           if (data && Array.isArray(data.users)) {
-            setUsers(data.users);
-            localStorage.setItem("nova_facturacion_users", JSON.stringify(data.users));
+            const serverUsers = data.users;
+
+            setUsers(serverUsers);
+            localStorage.setItem("nova_facturacion_users", JSON.stringify(serverUsers));
 
             // Keep current logged-in user state fully synchronized with the server-side state
             const loggedUserStr = localStorage.getItem("nova_facturacion_current_user");
             if (loggedUserStr) {
               const currentLogged = JSON.parse(loggedUserStr);
-              const fresh = data.users.find((u: any) => u.email.toLowerCase() === currentLogged.email.toLowerCase());
+              const fresh = serverUsers.find((u: any) => u.email.toLowerCase() === currentLogged.email.toLowerCase());
               if (fresh) {
                 setCurrentUser(fresh);
                 localStorage.setItem("nova_facturacion_current_user", JSON.stringify(fresh));
@@ -538,9 +540,22 @@ export default function App() {
 
       if (!existingUser) {
         // Registrar localmente (primera vez)
-        if (needsPhone && !phoneNorm) {
-          setAuthMessage("Se requiere un número de celular para activar tu licencia de prueba.");
-          return;
+        if (needsPhone) {
+          if (!phoneNorm) {
+            setAuthMessage("Se requiere un número de celular para activar tu licencia de prueba.");
+            return;
+          }
+
+          // Verificar si el teléfono ya está tomado por otro usuario
+          const isPhoneTaken = localUsers.some((u) => {
+            if (!u.phone) return false;
+            return String(u.phone).trim().replace(/\D/g, "") === phoneNorm;
+          });
+
+          if (isPhoneTaken) {
+            setAuthMessage("Este número de celular ya está registrado. Use otro correo y celular para registrar una cuenta nueva.");
+            return;
+          }
         }
 
         existingUser = {
@@ -563,11 +578,31 @@ export default function App() {
             return;
           }
 
-          // Permitir y sincronizar/guardar libremente el nuevo número ingresado sin errores de duplicados o bloqueos
-          existingUser.phone = phoneNorm;
-          const updatedUsers = localUsers.map((u) => u.email.toLowerCase() === cleanEmail ? existingUser! : u);
-          setUsers(updatedUsers);
-          localStorage.setItem("nova_facturacion_users", JSON.stringify(updatedUsers));
+          // El celular ingresado debe coincidir exactamente con el guardado
+          const existingPhoneNorm = existingUser.phone ? String(existingUser.phone).trim().replace(/\D/g, "") : "";
+          if (existingPhoneNorm && existingPhoneNorm !== phoneNorm) {
+            setAuthMessage("El número de celular ingresado no coincide con el registrado para esta cuenta.");
+            return;
+          }
+
+          if (!existingPhoneNorm) {
+            // Si el teléfono estaba vacío localmente, asegurar celular único
+            const isPhoneTaken = localUsers.some((u) => {
+              if (u.email.toLowerCase() === cleanEmail) return false;
+              if (!u.phone) return false;
+              return String(u.phone).trim().replace(/\D/g, "") === phoneNorm;
+            });
+
+            if (isPhoneTaken) {
+              setAuthMessage("Este número de celular ya está registrado en otra cuenta activa.");
+              return;
+            }
+
+            existingUser.phone = phoneNorm;
+            const updatedUsers = localUsers.map((u) => u.email.toLowerCase() === cleanEmail ? existingUser! : u);
+            setUsers(updatedUsers);
+            localStorage.setItem("nova_facturacion_users", JSON.stringify(updatedUsers));
+          }
         }
       }
 
@@ -1267,6 +1302,23 @@ export default function App() {
                                   title="Definir de por vida"
                                 >
                                   ⭐ Ilimitada
+                                </button>
+
+                                {/* Eliminar permanentemente la licencia */}
+                                <button
+                                  id={`delete-user-${u.email}`}
+                                  disabled={isSystemAdmin}
+                                  onClick={async () => {
+                                    if (confirm(`🚨 ¿Estás seguro de que deseas eliminar permanentemente la licencia de ${u.email}?`)) {
+                                      const updated = users.filter((uItem) => uItem.email.toLowerCase() !== u.email.toLowerCase());
+                                      await saveUsersToStorage(updated);
+                                      alert(`🗑️ Licencia de ${u.email} eliminada permanentemente del sistema.`);
+                                    }
+                                  }}
+                                  className="p-1 px-2 bg-red-650 hover:bg-red-700 text-white text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase bg-rose-600 hover:bg-rose-700"
+                                  title="Eliminar del sistema"
+                                >
+                                  🗑️ Eliminar
                                 </button>
                               </div>
 
