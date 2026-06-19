@@ -16,6 +16,7 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
   const [phone, setPhone] = useState("");
   const [rnc, setRnc] = useState("");
   const [creditLimit, setCreditLimit] = useState("5000");
+  const [initialDebt, setInitialDebt] = useState("");
 
   // Deletion inline confirm trigger
   const [deletingClientId, setDeletingClientId] = useState<string | null>(null);
@@ -31,13 +32,21 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
     e.preventDefault();
     if (!name.trim()) return;
 
+    const limitVal = parseFloat(creditLimit) || 0;
+    const initialDebtVal = parseFloat(initialDebt) || 0;
+
+    if (initialDebtVal > limitVal) {
+      alert(`Error: El monto fiado inicial (RD$${initialDebtVal}) no puede ser mayor que el límite de crédito (RD$${limitVal}).`);
+      return;
+    }
+
     const newClient: Client = {
       id: `cli-${Date.now()}`,
       name: name.trim(),
       phone: phone.trim() || "S/N",
       rnc: rnc.trim() || undefined,
-      creditLimit: parseFloat(creditLimit) || 0,
-      currentDebt: 0
+      creditLimit: limitVal,
+      currentDebt: initialDebtVal
     };
 
     onAddClient(newClient);
@@ -47,6 +56,7 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
     setPhone("");
     setRnc("");
     setCreditLimit("5000");
+    setInitialDebt("");
     setShowForm(false);
   };
 
@@ -170,6 +180,18 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
             />
           </div>
 
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Deuda Inicial / Monto Fiado (RD$ - Opcional)</label>
+            <input
+              id="new-client-initial-debt"
+              type="number"
+              value={initialDebt}
+              onChange={(e) => setInitialDebt(e.target.value)}
+              placeholder="0"
+              className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+            />
+          </div>
+
           <div className="col-span-full text-right pt-3 border-t border-slate-200/50">
             <button
               id="btn-submit-new-client"
@@ -217,6 +239,22 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
                           </span>
                         )}
 
+                        {client.currentDebt > 0 && (
+                          <button
+                            type="button"
+                            id={`btn-pay-hdr-${client.id}`}
+                            onClick={() => {
+                              setPayingClientId(client.id);
+                              setPaymentAmount("");
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold px-2 py-1 rounded text-[10px] flex items-center gap-0.5 transition cursor-pointer shrink-0 shadow-sm"
+                            title="Registrar pago o abono"
+                          >
+                            <DollarSign className="h-3 w-3" />
+                            Cobrar Fiao
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           id={`btn-delete-client-${client.id}`}
@@ -238,24 +276,26 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
                     {/* Fiao Progress Visual Indicator */}
                     <div className="mt-3 space-y-1">
                       <div className="flex justify-between text-[10px] text-slate-400 font-medium">
-                        <span>Límite de Fiado</span>
-                        <span className="font-mono text-slate-600">RD${client.creditLimit.toFixed(0)}</span>
+                        <span>Progreso de Pago / Solvencia</span>
+                        <span className={`font-bold ${client.currentDebt === 0 ? "text-emerald-600 font-extrabold uppercase" : "text-slate-600"}`}>
+                          {client.currentDebt === 0 ? "¡Pago Completo!" : `${(client.currentDebt === 0 ? 100 : Math.max(0, Math.min(100, ((client.creditLimit - client.currentDebt) / client.creditLimit) * 100))).toFixed(0)}%`}
+                        </span>
                       </div>
                       
-                      {/* Bar filled according to real current debt */}
-                      <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden relative border border-slate-100">
+                      {/* Bar filled according to real repayment progress */}
+                      <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden relative border border-slate-250">
                         <div 
-                          className={`h-full rounded-full transition-all duration-300 ${
-                            isCloseToOverdraft ? "bg-red-500" : "bg-emerald-500"
+                          className={`h-full rounded-full transition-all duration-500 bg-gradient-to-r ${
+                            client.currentDebt === 0 ? "from-emerald-500 to-teal-500" : "from-emerald-400 to-emerald-600"
                           }`}
-                          style={{ width: `${debtPercent}%` }}
+                          style={{ width: `${client.currentDebt === 0 ? 100 : Math.max(0, Math.min(100, ((client.creditLimit - client.currentDebt) / client.creditLimit) * 100))}%` }}
                         ></div>
                       </div>
 
                       <div className="flex justify-between text-[10px] pt-1">
-                        <span className="text-slate-400">Balance Deudor:</span>
-                        <span className={`font-mono font-extrabold ${client.currentDebt > 0 ? "text-red-500" : "text-emerald-600"}`}>
-                          RD${client.currentDebt.toFixed(0)}
+                        <span className="text-slate-400">Restante por Cobrar:</span>
+                        <span className={`font-mono font-extrabold ${client.currentDebt > 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                          {client.currentDebt > 0 ? `RD$${client.currentDebt.toFixed(0)}` : "RD$0 (Saldado)"}
                         </span>
                       </div>
                     </div>

@@ -66,7 +66,7 @@ export default function SalesHistory({
   const cashSales = sales.filter((s) => s.paymentMethod === "Efectivo").reduce((acc, s) => acc + s.total, 0);
   const cardSales = sales.filter((s) => s.paymentMethod === "Tarjeta").reduce((acc, s) => acc + s.total, 0);
   const transferSales = sales.filter((s) => s.paymentMethod === "Transferencia").reduce((acc, s) => acc + s.total, 0);
-  const fiadoSales = sales.filter((s) => s.paymentMethod === "Fiado" || s.paymentMethod === "Crédito").reduce((acc, s) => acc + s.total, 0);
+  const fiadoSales = clients.reduce((acc, c) => acc + (c.currentDebt || 0), 0);
 
   // Filter list
   const filteredSales = sales.filter((s) => {

@@ -389,13 +389,53 @@ export default function Receipts({ currentUser, clients, products }: ReceiptsPro
         `_Gracias por confiar en Nova_`;
     }
 
+    try {
+      // Determine filename
+      const fileName = `Recibo-${rec.receiptNumber || rec.id}.pdf`;
+      const blob = handlePrintPDF(rec, false, false);
+      const file = new File([blob], fileName, { type: "application/pdf" });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({
+          files: [file],
+          title: `Recibo ${rec.receiptNumber || rec.id}`,
+          text: `Comparto recibo de ${businessConfig.name}`
+        }).then(() => {
+          showBannerMessage("💬 Recibo PDF compartido directamente.");
+        }).catch((err) => {
+          console.error("error sharing pdf, falling back", err);
+          triggerFallbackWhatsApp(blob, text, fileName);
+        });
+      } else {
+        triggerFallbackWhatsApp(blob, text, fileName);
+      }
+    } catch (e) {
+      console.error("WhatsApp Share Exception", e);
+      // Failover to pure web link
+      const targetUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+      window.open(targetUrl, "_blank");
+    }
+  };
+
+  const triggerFallbackWhatsApp = (blob: Blob, text: string, fileName: string) => {
+    // Force download of the PDF file
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    // Open WhatsApp
     const targetUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
     window.open(targetUrl, "_blank");
-    showBannerMessage("💬 Texto formateado enviado a WhatsApp correctamente.");
+    showBannerMessage("📥 ¡Recibo PDF descargado automáticamente! Se abrió WhatsApp. Ahora puedes arrastrarlo o adjuntarlo directamente.");
   };
 
   // jsPDF Exporter
-  const handlePrintPDF = (rec: CustomReceipt, isThermal: boolean = false) => {
+  const handlePrintPDF = (rec: CustomReceipt, isThermal: boolean = false, shouldOpen: boolean = true) => {
     let docHeight = 297; // Letter / A4 default
     let docWidth = 210;
     
@@ -765,9 +805,12 @@ export default function Receipts({ currentUser, clients, products }: ReceiptsPro
 
     // Stream PDF or trigger system download print
     const blob = doc.output("blob");
-    const blobUrl = URL.createObjectURL(blob);
-    window.open(blobUrl, "_blank");
-    showBannerMessage(`📄 Recibo PDF generado con éxito en formato ${isThermal ? "Térmico (80mm)" : "A4/Carta"}`);
+    if (shouldOpen) {
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, "_blank");
+      showBannerMessage(`📄 Recibo PDF generado con éxito en formato ${isThermal ? "Térmico (80mm)" : "A4/Carta"}`);
+    }
+    return blob;
   };
 
   return (
