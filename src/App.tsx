@@ -78,6 +78,7 @@ export default function App() {
   const [authEmail, setAuthEmail] = useState("");
   const [authPhone, setAuthPhone] = useState("");
   const [authMessage, setAuthMessage] = useState("");
+  const [adminSearchQuery, setAdminSearchQuery] = useState("");
 
   // NCF invoice numbering sequence state
   const [ncfCounts, setNcfCounts] = useState({ B01: 1, B02: 1 });
@@ -97,6 +98,17 @@ export default function App() {
   const reprintConfig = useMemo(() => {
     return getBusinessConfig(currentUser?.email || "guest");
   }, [currentUser, reprintSale]);
+
+  const filteredUsers = useMemo(() => {
+    return users.filter((u) => {
+      const q = adminSearchQuery.toLowerCase().trim();
+      if (!q) return true;
+      return (
+        (u.email && u.email.toLowerCase().includes(q)) ||
+        (u.phone && u.phone.toLowerCase().includes(q))
+      );
+    });
+  }, [users, adminSearchQuery]);
 
   // Initialize and load from local persistence (localStorage) per user & Server
   useEffect(() => {
@@ -696,13 +708,6 @@ export default function App() {
               Iniciar Sesión Seguro
             </button>
           </div>
-
-          {/* Tester Helper Tips */}
-          <div className="mt-6 pt-5 border-t border-slate-800 text-[10.5px] text-slate-500 space-y-1 bg-slate-950/20 p-3 rounded-lg">
-            <span className="font-bold text-slate-400 block mb-0.5">💡 Guía Rápida de Acceso:</span>
-            <p>1. Para ingresar como <b>Administrador</b>, pon: <code className="text-emerald-400">financieranova0@gmail.com</code> (omite teléfono).</p>
-            <p>2. Para crear un <b>Usuario de Prueba</b>, pon cualquier otro correo y un celular único.</p>
-          </div>
         </div>
       </div>
     );
@@ -1006,31 +1011,307 @@ export default function App() {
 
 
 
-            {/* Security and licensing policy metrics placeholder as requested to eliminate the users table list */}
-            <div className="mt-4 p-5 bg-slate-50 rounded-xl border border-slate-200">
-              <div className="flex items-start gap-3.5">
-                <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-150 shrink-0">
-                  <Shield className="h-6 w-6" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Consola de Seguridad & Registro Protegido</h3>
-                  <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-                    El listado visual de usuarios registrados ha sido eliminado exitosamente del panel de control de administración para optimizar el rendimiento y resguardar la privacidad.
-                  </p>
-                  <p className="text-xs text-slate-600 mt-2.5 leading-relaxed font-semibold">
-                    🔑 Reglas de Autenticación Activas en Servidor:
-                  </p>
-                  <ul className="list-disc list-inside mt-1.5 space-y-1 text-xs text-slate-600 pl-1">
-                    <li>Los usuarios registrados con anterioridad pueden iniciar sesión normalmente con su correo y celular original.</li>
-                    <li>No se permiten correos electrónicos duplicados ni registros con números de teléfono que pertenezcan a otra terminal.</li>
-                    <li>Las activaciones nuevas exigen la carga de ambos campos obligatorios con validación a nivel de servidor.</li>
-                  </ul>
-                  <div className="mt-4 pt-3 border-t border-slate-250 flex items-center gap-1 text-[10px] uppercase font-black text-emerald-700">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse inline-block"></span>
-                    Sincronización de Licencias Activa y Protegida
-                  </div>
-                </div>
+            {/* Buscador de usuarios y sincronizador manual */}
+            <div className="flex flex-col sm:flex-row items-center gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200 mt-2">
+              <div className="relative flex-1 w-full">
+                <input
+                  id="admin-user-search"
+                  type="text"
+                  placeholder="🔍 Buscar licencia por correo o teléfono..."
+                  value={adminSearchQuery}
+                  onChange={(e) => setAdminSearchQuery(e.target.value)}
+                  className="w-full pl-3 pr-8 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 font-sans"
+                />
+                {adminSearchQuery && (
+                  <button
+                    onClick={() => setAdminSearchQuery("")}
+                    className="absolute right-2.5 top-2.5 text-xs text-slate-400 hover:text-slate-600 font-bold"
+                    title="Limpiar búsqueda"
+                  >
+                    ×
+                  </button>
+                )}
               </div>
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await fetch("/api/users");
+                    if (res.ok) {
+                      const data = await res.json();
+                      if (data && Array.isArray(data.users)) {
+                        setUsers(data.users);
+                        localStorage.setItem("nova_facturacion_users", JSON.stringify(data.users));
+                        alert("🟢 ¡Base de datos de licencias sincronizada con éxito desde el servidor!");
+                      }
+                    }
+                  } catch (e) {
+                    alert("🛑 Error al conectar con el servidor de licencias.");
+                  }
+                }}
+                className="w-full sm:w-auto px-4 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-xs font-black rounded-lg transition duration-200 cursor-pointer flex items-center justify-center gap-1.5 uppercase"
+              >
+                <RefreshCw className="h-4 w-4 animate-spin-slow" />
+                Refrescar Servidor Now
+              </button>
+            </div>
+
+            {/* Listado dinámico de licencias */}
+            <div className="overflow-x-auto mt-4 rounded-xl border border-slate-200">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-100 uppercase text-[10px] text-slate-500 tracking-wider">
+                  <tr>
+                    <th className="py-3 px-3 font-bold">Fecha Reg.</th>
+                    <th className="py-3 px-3 font-bold">Correo de Licencia / Cliente</th>
+                    <th className="py-3 px-3 font-bold">Teléfono Enlazado</th>
+                    <th className="py-3 px-3 font-bold">Bypass Número</th>
+                    <th className="py-3 px-3 font-bold">Vence El</th>
+                    <th className="py-3 px-3 font-bold">Estado</th>
+                    <th className="py-3 px-3 font-bold text-center">Gestión Directa</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {filteredUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-400 italic">
+                        {adminSearchQuery 
+                          ? "Ninguna licencia coincide con los criterios de búsqueda." 
+                          : "No hay terminales registradas todavía en el sistema."}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredUsers.map((u) => {
+                      const isSystemAdmin = u.email === "financieranova0@gmail.com" || u.email === "christheriault880@gmail.com";
+                      
+                      return (
+                        <tr id={`user-admin-row-${u.email}`} key={u.email} className="hover:bg-slate-50 transition duration-150">
+                          <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">
+                            {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "S/F"}
+                          </td>
+                          <td className="py-3.5 px-3 font-bold text-slate-800">
+                            <span className="block truncate max-w-[200px]" title={u.email}>
+                              {u.email}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-3 font-mono whitespace-nowrap">
+                            {u.phone ? (
+                              <span className="bg-slate-100 text-slate-800 px-2 py-0.5 rounded font-bold text-[11px]">
+                                📱 {u.phone}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic">No enlazado</span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-3 whitespace-nowrap">
+                            <button
+                              id={`btn-bypass-${u.email}`}
+                              disabled={isSystemAdmin}
+                              onClick={async () => {
+                                const updated = users.map((uItem) => {
+                                  if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
+                                    return { ...uItem, bypassPhone: !uItem.bypassPhone };
+                                  }
+                                  return uItem;
+                                });
+                                await saveUsersToStorage(updated);
+                              }}
+                              className={`p-1 px-2 text-[10px] font-bold rounded cursor-pointer transition ${
+                                u.bypassPhone 
+                                  ? "bg-amber-100 text-amber-700 border border-amber-250 animate-pulse" 
+                                  : "bg-slate-100 text-slate-655 hover:bg-slate-200 border border-slate-150"
+                              } disabled:opacity-35`}
+                            >
+                              {u.bypassPhone ? "Permitido (Bypass)" : "Exige Teléfono"}
+                            </button>
+                          </td>
+                          <td className="py-3.5 px-3 font-mono whitespace-nowrap">
+                            {u.expiresAt === "forever" ? (
+                              <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold uppercase text-[9px] px-2 py-0.5 rounded">
+                                Ilimitada / De por vida
+                              </span>
+                            ) : (
+                              <span className="text-slate-700 font-semibold">
+                                {new Date(u.expiresAt).toLocaleDateString()}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-3 whitespace-nowrap">
+                            {(() => {
+                              const isRowExpired = u.expiresAt !== "forever" && new Date() > new Date(u.expiresAt);
+                              const isRowSuspended = u.status === "suspended";
+                              
+                              if (isRowSuspended) {
+                                return (
+                                  <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-rose-100 text-rose-800 border border-rose-200 uppercase">
+                                    🛑 Suspendido
+                                  </span>
+                                );
+                              } else if (isRowExpired) {
+                                return (
+                                  <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-200 uppercase">
+                                    ⌛ Vencido
+                                  </span>
+                                );
+                              } else {
+                                return (
+                                  <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 uppercase">
+                                    🟢 Activo
+                                  </span>
+                                );
+                              }
+                            })()}
+                          </td>
+                          <td className="py-3.5 px-3 text-center">
+                            <div className="flex flex-col gap-2 items-center justify-center">
+                              {/* Botones de acción rápida */}
+                              <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                                {/* Activar o Suspender */}
+                                {u.status === "suspended" ? (
+                                  <button
+                                    id={`activate-user-${u.email}`}
+                                    disabled={isSystemAdmin}
+                                    onClick={async () => {
+                                      const updated = users.map((uItem) => {
+                                        if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
+                                          return { ...uItem, status: "active" as const };
+                                        }
+                                        return uItem;
+                                      });
+                                      await saveUsersToStorage(updated);
+                                      alert(`🟢 Licencia de ${u.email} ACTIVADA con éxito.`);
+                                    }}
+                                    className="p-1 px-2 bg-emerald-150 hover:bg-emerald-200 text-emerald-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
+                                    title="Activar Licencia"
+                                  >
+                                    🟢 Activar
+                                  </button>
+                                ) : (
+                                  <button
+                                    id={`suspend-user-${u.email}`}
+                                    disabled={isSystemAdmin}
+                                    onClick={async () => {
+                                      const updated = users.map((uItem) => {
+                                        if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
+                                          return { ...uItem, status: "suspended" as const };
+                                        }
+                                        return uItem;
+                                      });
+                                      await saveUsersToStorage(updated);
+                                      alert(`🛑 Licencia de ${u.email} SUSPENDIDA de inmediato.`);
+                                    }}
+                                    className="p-1 px-2 bg-rose-100 hover:bg-rose-150 text-rose-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
+                                    title="Suspender Licencia"
+                                  >
+                                    🛑 Suspender
+                                  </button>
+                                )}
+
+                                {/* Vencer Ahora / Vender */}
+                                <button
+                                  id={`trigger-expire-now-${u.email}`}
+                                  disabled={isSystemAdmin}
+                                  onClick={async () => {
+                                    const updated = users.map((uItem) => {
+                                      if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
+                                        return { 
+                                          ...uItem, 
+                                          expiresAt: new Date(Date.now() - 60000).toISOString() 
+                                        };
+                                      }
+                                      return uItem;
+                                    });
+                                    await saveUsersToStorage(updated);
+                                    alert(`⌛ Licencia de ${u.email} marcada como VENCIDA con éxito.`);
+                                  }}
+                                  className="p-1 px-2 bg-amber-100 hover:bg-amber-150 text-amber-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
+                                  title="Terminar período de prueba de inmediato"
+                                >
+                                  ⌛ Vencer Now
+                                </button>
+
+                                {/* Extender +30 días */}
+                                <button
+                                  id={`extend-30-${u.email}`}
+                                  disabled={isSystemAdmin}
+                                  onClick={async () => {
+                                    const updated = users.map((uItem) => {
+                                      if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
+                                        const base = uItem.expiresAt === "forever" || new Date(uItem.expiresAt) < new Date()
+                                          ? Date.now() 
+                                          : new Date(uItem.expiresAt).getTime();
+                                        return { 
+                                          ...uItem, 
+                                          expiresAt: new Date(base + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                                          status: "active" as const
+                                        };
+                                      }
+                                      return uItem;
+                                    });
+                                    await saveUsersToStorage(updated);
+                                    alert(`🔄 Suscripción extendida +30 días para ${u.email} con éxito.`);
+                                  }}
+                                  className="p-1 px-2 bg-blue-100 hover:bg-blue-150 text-blue-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
+                                  title="Agregar un mes activo"
+                                >
+                                  ➕ 30 Días
+                                </button>
+
+                                {/* Licencia de por vida / Forever */}
+                                <button
+                                  id={`set-forever-${u.email}`}
+                                  disabled={isSystemAdmin}
+                                  onClick={async () => {
+                                    const updated = users.map((uItem) => {
+                                      if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
+                                        return { ...uItem, expiresAt: "forever", status: "active" as const };
+                                      }
+                                      return uItem;
+                                    });
+                                    await saveUsersToStorage(updated);
+                                    alert(`⭐ Licencia de ${u.email} configurada como ILIMITADA.`);
+                                  }}
+                                  className="p-1 px-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
+                                  title="Definir de por vida"
+                                >
+                                  ⭐ Ilimitada
+                                </button>
+                              </div>
+
+                              {/* Asignador de fecha exacta con Date Picker */}
+                              <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded border border-slate-200">
+                                <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">📅 Expira:</span>
+                                <input
+                                  id={`custom-date-picker-${u.email}`}
+                                  type="date"
+                                  disabled={isSystemAdmin}
+                                  value={u.expiresAt === "forever" ? "" : u.expiresAt.substring(0, 10)}
+                                  onChange={async (e) => {
+                                    const selectVal = e.target.value;
+                                    if (!selectVal) return;
+                                    const parsedDate = new Date(selectVal + "T23:59:59");
+                                    const updated = users.map((uItem) => {
+                                      if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
+                                        return {
+                                          ...uItem,
+                                          expiresAt: parsedDate.toISOString(),
+                                          status: "active" as const
+                                        };
+                                      }
+                                      return uItem;
+                                    });
+                                    await saveUsersToStorage(updated);
+                                    alert(`📅 Licencia de ${u.email} configurada con expiración exacta el: ${parsedDate.toLocaleDateString()}`);
+                                  }}
+                                  className="p-0.5 text-[9px] border border-slate-300 rounded bg-white text-slate-700 font-mono outline-none cursor-pointer max-w-[100px] disabled:opacity-45"
+                                />
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
