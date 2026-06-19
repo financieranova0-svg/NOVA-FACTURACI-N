@@ -110,6 +110,30 @@ export default function Receipts({ currentUser, clients, products }: ReceiptsPro
   const [proximoPagoFecha, setProximoPagoFecha] = useState("");
   const [cuotasPagadas, setCuotasPagadas] = useState("1/7");
   const [cuotasAtrasadas, setCuotasAtrasadas] = useState<number>(0);
+
+  // States for automatic calculations of remaining debt and accumulated paid
+  const [montoTotalDeuda, setMontoTotalDeuda] = useState<number>(0);
+  const [abonoInicialDeuda, setAbonoInicialDeuda] = useState<number>(0);
+
+  // Synchronize total debt when totalAmount (Article Price) changes
+  useEffect(() => {
+    if (totalAmount) {
+      setMontoTotalDeuda(totalAmount);
+    }
+  }, [totalAmount]);
+
+  // Handle automatic calculations for Cuota payment section
+  useEffect(() => {
+    const total = Number(montoTotalDeuda) || 0;
+    const initialDown = Number(abonoInicialDeuda) || 0;
+    const currentAbono = Number(abonoCuotas) || 0;
+
+    const calculatedTotalPagado = initialDown + currentAbono;
+    const calculatedDeudaRestante = total - calculatedTotalPagado;
+
+    setTotalPagado(calculatedTotalPagado);
+    setTotalRestante(calculatedDeudaRestante);
+  }, [montoTotalDeuda, abonoInicialDeuda, abonoCuotas]);
   
   // Type 3 special:
   const [montoInicial, setMontoInicial] = useState<number>(0);
@@ -1137,6 +1161,36 @@ export default function Receipts({ currentUser, clients, products }: ReceiptsPro
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                 <div>
+                  <label className="block text-[10px] font-black text-indigo-900 uppercase tracking-wider mb-0.5">💰 Monto Total de la Venta / Financiamiento (RD$)</label>
+                  <p className="text-[10px] text-slate-400 mb-1">Monto total original del artículo o financiamiento:</p>
+                  <input
+                    type="number"
+                    placeholder="Ej: 40000"
+                    value={montoTotalDeuda || ""}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setMontoTotalDeuda(isNaN(val) ? 0 : val);
+                    }}
+                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-extrabold text-indigo-800 bg-indigo-50/10"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-indigo-950 uppercase tracking-wider mb-0.5">📥 Abono Inicial que dio (RD$)</label>
+                  <p className="text-[10px] text-slate-400 mb-1">El enganche o abono inicial dado al iniciar el contrato (no el pago de hoy):</p>
+                  <input
+                    type="number"
+                    placeholder="Ej: 10000"
+                    value={abonoInicialDeuda || ""}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setAbonoInicialDeuda(isNaN(val) ? 0 : val);
+                    }}
+                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                  />
+                </div>
+
+                <div>
                   <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-0.5">No. de Factura / ID Contrato *</label>
                   <p className="text-[10px] text-slate-400 mb-1">Para identificar a qué venta o acuerdo pertenece este abono:</p>
                   <input
@@ -1151,49 +1205,57 @@ export default function Receipts({ currentUser, clients, products }: ReceiptsPro
 
                 <div>
                   <label className="block text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-0.5">💵 Abono Realizado en esta Transacción *</label>
-                  <p className="text-[10px] text-slate-400 mb-1">El monto exacto en efectivo que el cliente te entrega hoy:</p>
+                  <p className="text-[10px] text-slate-400 mb-1">El monto de cuota que el cliente te entrega HOY:</p>
                   <input
                     type="number"
                     required
                     placeholder="Abonado hoy"
                     value={abonoCuotas || ""}
-                    onChange={(e) => setAbonoCuotas(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      const cleanVal = isNaN(val) ? 0 : val;
+                      setAbonoCuotas(cleanVal);
+                      setProximoPagoMonto(cleanVal); // Set next installment to amount paid today automatically, editable manually!
+                    }}
                     className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-extrabold text-emerald-700 bg-emerald-50/30"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-0.5">Deuda Restante del Cliente (RD$)</label>
-                  <p className="text-[10px] text-slate-400 mb-1">Cuánto dinero le queda debiendo el cliente a la financiera después de este pago:</p>
+                  <p className="text-[10px] text-slate-400 mb-1">Calculado automático como [Monto Total] - [Total Pagado Acumulado]:</p>
                   <input
                     type="number"
-                    placeholder="Monto restante restante"
-                    value={totalRestante || ""}
-                    onChange={(e) => setTotalRestante(Number(e.target.value))}
-                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500 font-black text-rose-700 bg-rose-50/10"
+                    readOnly
+                    placeholder="Deuda restante"
+                    value={totalRestante || 0}
+                    className="w-full text-xs bg-slate-100 border border-slate-250 rounded-xl px-3 py-2 text-slate-900 font-black text-rose-700 bg-rose-50/10 cursor-not-allowed"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-0.5">Total Pagado Acumulado a la fecha</label>
-                  <p className="text-[10px] text-slate-400 mb-1">Suma total acumulada de abonos (incluyendo el de hoy):</p>
+                  <p className="text-[10px] text-slate-400 mb-1">Calculado automático como [Abono Inicial] + [Abono de Hoy]:</p>
                   <input
                     type="number"
+                    readOnly
                     placeholder="Acumulado"
-                    value={totalPagado || ""}
-                    onChange={(e) => setTotalPagado(Number(e.target.value))}
-                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-bold"
+                    value={totalPagado || 0}
+                    className="w-full text-xs bg-slate-100 border border-slate-250 rounded-xl px-3 py-2 text-slate-900 font-bold cursor-not-allowed"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-0.5">Monto de la Próxima Cuota (RD$)</label>
-                  <p className="text-[10px] text-slate-400 mb-1">Cuota pactada para el siguiente mes o periodo:</p>
+                  <p className="text-[10px] text-slate-400 mb-1">Cuota pactada para el siguiente mes o periodo (editable manualmente):</p>
                   <input
                     type="number"
                     placeholder="Ej: 4000"
                     value={proximoPagoMonto || ""}
-                    onChange={(e) => setProximoPagoMonto(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setProximoPagoMonto(isNaN(val) ? 0 : val);
+                    }}
                     className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-bold"
                   />
                 </div>
@@ -1228,7 +1290,10 @@ export default function Receipts({ currentUser, clients, products }: ReceiptsPro
                     type="number"
                     placeholder="0"
                     value={cuotasAtrasadas}
-                    onChange={(e) => setCuotasAtrasadas(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setCuotasAtrasadas(isNaN(val) ? 0 : val);
+                    }}
                     className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500 font-extrabold text-rose-700 bg-rose-50/10"
                   />
                 </div>
