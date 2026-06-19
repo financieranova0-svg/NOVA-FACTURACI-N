@@ -148,6 +148,29 @@ export default function App() {
               if (fresh) {
                 setCurrentUser(fresh);
                 localStorage.setItem("nova_facturacion_current_user", JSON.stringify(fresh));
+              } else {
+                // Si está logueado en el navegador localmente pero no aparece en el servidor, registrar automáticamente en el backend
+                try {
+                  const syncRes = await fetch("/api/auth", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email: currentLogged.email, phone: currentLogged.phone || "" })
+                  });
+                  if (syncRes.ok) {
+                    const syncData = await syncRes.json();
+                    if (syncData && Array.isArray(syncData.users)) {
+                      setUsers(syncData.users);
+                      localStorage.setItem("nova_facturacion_users", JSON.stringify(syncData.users));
+                      const freshLocal = syncData.users.find((u: any) => u.email.toLowerCase() === currentLogged.email.toLowerCase());
+                      if (freshLocal) {
+                        setCurrentUser(freshLocal);
+                        localStorage.setItem("nova_facturacion_current_user", JSON.stringify(freshLocal));
+                      }
+                    }
+                  }
+                } catch (se) {
+                  console.error("Auto-registro curativo de sesión falló:", se);
+                }
               }
             }
           }
@@ -520,18 +543,6 @@ export default function App() {
           return;
         }
 
-        if (needsPhone) {
-          // Verificar teléfono único
-          const phoneRegistered = localUsers.some((u) => {
-            if (!u.phone) return false;
-            return String(u.phone).trim().replace(/\D/g, "") === phoneNorm;
-          });
-          if (phoneRegistered) {
-            setAuthMessage("Este número de celular ya está vinculado a otra licencia activa.");
-            return;
-          }
-        }
-
         existingUser = {
           email: cleanEmail,
           phone: needsPhone ? phoneNorm : undefined,
@@ -552,28 +563,11 @@ export default function App() {
             return;
           }
 
-          if (existingUser.phone) {
-            const extPhoneNorm = String(existingUser.phone).trim().replace(/\D/g, "");
-            if (extPhoneNorm !== phoneNorm) {
-              setAuthMessage("El celular ingresado no coincide con el registrado para esta cuenta.");
-              return;
-            }
-          } else {
-            // Vincular nuevo número de celular si por alguna razón estaba vacío en el registro actual
-            const phoneRegistered = localUsers.some((u) => {
-              if (u.email.toLowerCase() === cleanEmail) return false;
-              if (!u.phone) return false;
-              return String(u.phone).trim().replace(/\D/g, "") === phoneNorm;
-            });
-            if (phoneRegistered) {
-              setAuthMessage("Este número telefónico ya está registrado en otra licencia activa.");
-              return;
-            }
-            existingUser.phone = phoneNorm;
-            const updatedUsers = localUsers.map((u) => u.email.toLowerCase() === cleanEmail ? existingUser! : u);
-            setUsers(updatedUsers);
-            localStorage.setItem("nova_facturacion_users", JSON.stringify(updatedUsers));
-          }
+          // Permitir y sincronizar/guardar libremente el nuevo número ingresado sin errores de duplicados o bloqueos
+          existingUser.phone = phoneNorm;
+          const updatedUsers = localUsers.map((u) => u.email.toLowerCase() === cleanEmail ? existingUser! : u);
+          setUsers(updatedUsers);
+          localStorage.setItem("nova_facturacion_users", JSON.stringify(updatedUsers));
         }
       }
 

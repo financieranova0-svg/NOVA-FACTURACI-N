@@ -93,19 +93,6 @@ async function startServer() {
           return res.status(400).json({ error: "Se requiere un número de celular para activar tu licencia de prueba." });
         }
 
-        if (needsPhone) {
-          // Verificar que ningún usuario tenga ya este teléfono registrado
-          const phoneRegistered = currentUsers.some((u: any) => {
-            if (!u.phone) return false;
-            const pNorm = String(u.phone).trim().replace(/\D/g, "");
-            return pNorm === phone;
-          });
-
-          if (phoneRegistered) {
-            return res.status(400).json({ error: "Este número de celular ya está vinculado a otra licencia activa." });
-          }
-        }
-
         user = {
           email,
           phone: needsPhone ? phone : undefined,
@@ -124,27 +111,9 @@ async function startServer() {
             return res.status(400).json({ error: "Ingrese su celular registrado para iniciar sesión." });
           }
 
-          // Si ya tiene un teléfono registrado, el número ingresado debe coincidir
-          if (user.phone) {
-            const userPhoneNorm = String(user.phone).trim().replace(/\D/g, "");
-            if (userPhoneNorm !== phone) {
-              return res.status(400).json({ error: "El celular ingresado no coincide con el registrado para esta cuenta." });
-            }
-          } else {
-            // Si por alguna razón no tenía teléfono registrado (ejemplo: admin manual), vincularlo de forma segura
-            const phoneRegistered = currentUsers.some((u: any) => {
-              if (u.email && String(u.email).toLowerCase() === email) return false;
-              if (!u.phone) return false;
-              const pNorm = String(u.phone).trim().replace(/\D/g, "");
-              return pNorm === phone;
-            });
-
-            if (phoneRegistered) {
-              return res.status(400).json({ error: "Este número telefónico ya está registrado en otra licencia activa." });
-            }
-            user.phone = phone;
-            writeUsers(currentUsers);
-          }
+          // Sincronizar o actualizar libremente el número de teléfono
+          user.phone = phone;
+          writeUsers(currentUsers);
         }
       }
 
