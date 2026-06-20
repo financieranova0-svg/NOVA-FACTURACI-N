@@ -61,6 +61,15 @@ const DEFAULT_USERS: AppUser[] = [
   }
 ];
 
+// Helper to resolve the master operating email for shared accounts (Owner-Employee)
+export function getOperatingEmail(email: string): string {
+  const clean = String(email || "").trim().toLowerCase();
+  if (clean === "marialuzgonzalez1234568@gmail.com") {
+    return "luisrodriguezgon22@gmail.com";
+  }
+  return clean;
+}
+
 export default function App() {
   // Tabs: pos, inventory, clients, sales, admin, profile, receipts
   const [activeTab, setActiveTab] = useState<"pos" | "inventory" | "clients" | "sales" | "admin" | "profile" | "receipts">("pos");
@@ -69,6 +78,7 @@ export default function App() {
   const [clients, setClients] = useState<Client[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [closures, setClosures] = useState<DailyClosure[]>([]);
+  const [localVersion, setLocalVersion] = useState<number>(0);
   
   // Auth users management
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -191,6 +201,16 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Protect employee from accessing inventory catalog
+  useEffect(() => {
+    if (currentUser) {
+      const emailLower = currentUser.email.toLowerCase().trim();
+      if (emailLower === "marialuzgonzalez1234568@gmail.com" && activeTab === "inventory") {
+        setActiveTab("pos");
+      }
+    }
+  }, [activeTab, currentUser]);
+
   // Sync state whenever logged currentUser changes to support Isolation
   useEffect(() => {
     if (!currentUser) {
@@ -199,12 +219,17 @@ export default function App() {
       setSales([]);
       setClosures([]);
       setNcfCounts({ B01: 1, B02: 1 });
+      setLocalVersion(0);
       return;
     }
 
     try {
-      const email = currentUser.email;
+      const email = getOperatingEmail(currentUser.email);
       const isDemoAdmin = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
+
+      // Version Isolation
+      const storedVersion = localStorage.getItem(`factura_pos_version_${email}`);
+      setLocalVersion(storedVersion ? Number(storedVersion) : 0);
 
       // Products Isolation
       const storedProducts = localStorage.getItem(`factura_pos_products_${email}`);
@@ -303,39 +328,121 @@ export default function App() {
     }
   }, [currentUser]);
 
+  // Real-time synchronization loop for POS lists when online
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    // Skip sync if offline
+    if (typeof window !== "undefined" && !window.navigator.onLine) return;
+
+    const email = getOperatingEmail(currentUser.email);
+
+    const performSync = async () => {
+      try {
+        const res = await fetch(`/api/sync-pos-data?email=${encodeURIComponent(email)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const serverVersion = data.version || 0;
+
+        // Obtain local version state again safely
+        const storedLocal = localStorage.getItem(`factura_pos_version_${email}`);
+        const currentLocalVer = storedLocal ? Number(storedLocal) : 0;
+
+        if (serverVersion > currentLocalVer) {
+          // Server has newer data. Bring it down!
+          setProducts(data.products || []);
+          setClients(data.clients || []);
+          setSales(data.sales || []);
+          setClosures(data.closures || []);
+          setNcfCounts(data.ncfCount || { B01: 1, B02: 1 });
+
+          localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(data.products || []));
+          localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(data.clients || []));
+          localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify(data.sales || []));
+          localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify(data.closures || []));
+          localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(data.ncfCount || { B01: 1, B02: 1 }));
+          
+          setLocalVersion(serverVersion);
+          localStorage.setItem(`factura_pos_version_${email}`, String(serverVersion));
+        } else if (currentLocalVer > serverVersion) {
+          // Local has newer data. Push up!
+          await fetch("/api/sync-pos-data", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email,
+              products: JSON.parse(localStorage.getItem(`factura_pos_products_${email}`) || "[]"),
+              clients: JSON.parse(localStorage.getItem(`factura_pos_clients_${email}`) || "[]"),
+              sales: JSON.parse(localStorage.getItem(`factura_pos_sales_${email}`) || "[]"),
+              ncf: JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1}'),
+              closures: JSON.parse(localStorage.getItem(`factura_pos_closures_${email}`) || "[]"),
+              version: currentLocalVer
+            })
+          });
+        }
+      } catch (err) {
+        console.error("Error in real-time background sync loop:", err);
+      }
+    };
+
+    performSync(); // run initially
+    const syncInterval = setInterval(performSync, 6000); // Poll and push every 6 seconds
+    return () => clearInterval(syncInterval);
+  }, [currentUser, localVersion]);
+
   // Helper sync triggers to localstorage per user-key
   const saveProductsToStorage = (updatedProducts: Product[]) => {
     setProducts(updatedProducts);
     if (currentUser) {
-      localStorage.setItem(`factura_pos_products_${currentUser.email}`, JSON.stringify(updatedProducts));
+      const email = getOperatingEmail(currentUser.email);
+      localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(updatedProducts));
+      const newVer = localVersion + 1;
+      setLocalVersion(newVer);
+      localStorage.setItem(`factura_pos_version_${email}`, String(newVer));
     }
   };
 
   const saveClientsToStorage = (updatedClients: Client[]) => {
     setClients(updatedClients);
     if (currentUser) {
-      localStorage.setItem(`factura_pos_clients_${currentUser.email}`, JSON.stringify(updatedClients));
+      const email = getOperatingEmail(currentUser.email);
+      localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(updatedClients));
+      const newVer = localVersion + 1;
+      setLocalVersion(newVer);
+      localStorage.setItem(`factura_pos_version_${email}`, String(newVer));
     }
   };
 
   const saveSalesToStorage = (updatedSales: Sale[]) => {
     setSales(updatedSales);
     if (currentUser) {
-      localStorage.setItem(`factura_pos_sales_${currentUser.email}`, JSON.stringify(updatedSales));
+      const email = getOperatingEmail(currentUser.email);
+      localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify(updatedSales));
+      const newVer = localVersion + 1;
+      setLocalVersion(newVer);
+      localStorage.setItem(`factura_pos_version_${email}`, String(newVer));
     }
   };
 
   const saveNcfToStorage = (updatedNcf: typeof ncfCounts) => {
     setNcfCounts(updatedNcf);
     if (currentUser) {
-      localStorage.setItem(`factura_pos_ncf_${currentUser.email}`, JSON.stringify(updatedNcf));
+      const email = getOperatingEmail(currentUser.email);
+      localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(updatedNcf));
+      const newVer = localVersion + 1;
+      setLocalVersion(newVer);
+      localStorage.setItem(`factura_pos_version_${email}`, String(newVer));
     }
   };
 
   const saveClosuresToStorage = (updatedClosures: DailyClosure[]) => {
     setClosures(updatedClosures);
     if (currentUser) {
-      localStorage.setItem(`factura_pos_closures_${currentUser.email}`, JSON.stringify(updatedClosures));
+      const email = getOperatingEmail(currentUser.email);
+      localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify(updatedClosures));
+      const newVer = localVersion + 1;
+      setLocalVersion(newVer);
+      localStorage.setItem(`factura_pos_version_${email}`, String(newVer));
     }
   };
 
@@ -638,7 +745,7 @@ export default function App() {
   // Mock server reset button to start clean
   const handleSystemRestoreDefault = () => {
     if (!currentUser) return;
-    const email = currentUser.email;
+    const email = getOperatingEmail(currentUser.email);
     const isDemoAdmin = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
 
     if (confirm("🚨 ¿Deseas restablecer el sistema? Se borrarán las facturas de esta sesión y se recuperará el catálogo correspondiente.")) {
@@ -647,6 +754,7 @@ export default function App() {
       localStorage.removeItem(`factura_pos_sales_${email}`);
       localStorage.removeItem(`factura_pos_ncf_${email}`);
       localStorage.removeItem(`factura_pos_closures_${email}`);
+      localStorage.removeItem(`factura_pos_version_${email}`);
       
       const defaultProducts = isDemoAdmin ? INITIAL_PRODUCTS : [];
       const defaultClients = isDemoAdmin ? INITIAL_CLIENTS : [];
@@ -662,6 +770,11 @@ export default function App() {
       localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify([]));
       localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify({ B01: 1, B02: 1 }));
       localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify([]));
+
+      // Increment local version to push the clean reset to the server and sync the other nodes
+      const newVer = localVersion + 1;
+      setLocalVersion(newVer);
+      localStorage.setItem(`factura_pos_version_${email}`, String(newVer));
 
       setActiveTab("pos");
     }
@@ -890,21 +1003,23 @@ export default function App() {
             Caja POS Rápida
           </button>
 
-          <button
-            id="tab-inventory"
-            onClick={() => {
-              setActiveTab("inventory");
-              setReprintSale(null); // safely dismiss overlay
-            }}
-            className={`py-3.5 px-4.5 text-xs font-black flex items-center gap-1.5 border-b-2 transition duration-150 shrink-0 uppercase cursor-pointer ${
-              activeTab === "inventory"
-                ? "border-emerald-600 text-emerald-700"
-                : "border-transparent text-slate-500 hover:text-slate-850 hover:border-slate-300"
-            }`}
-          >
-            <Layers className="h-4 w-4" />
-            Catálogo Inventario
-          </button>
+          {currentUser?.email.toLowerCase().trim() !== "marialuzgonzalez1234568@gmail.com" && (
+            <button
+              id="tab-inventory"
+              onClick={() => {
+                setActiveTab("inventory");
+                setReprintSale(null); // safely dismiss overlay
+              }}
+              className={`py-3.5 px-4.5 text-xs font-black flex items-center gap-1.5 border-b-2 transition duration-150 shrink-0 uppercase cursor-pointer ${
+                activeTab === "inventory"
+                  ? "border-emerald-600 text-emerald-700"
+                  : "border-transparent text-slate-500 hover:text-slate-850 hover:border-slate-300"
+              }`}
+            >
+              <Layers className="h-4 w-4" />
+              Catálogo Inventario
+            </button>
+          )}
 
           <button
             id="tab-clients"

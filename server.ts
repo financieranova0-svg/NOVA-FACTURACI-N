@@ -268,6 +268,74 @@ async function startServer() {
     }
   });
 
+  // Helper inside server to resolve the master operating email for shared accounts (Owner-Employee)
+  function getOperatingEmailServer(email: string): string {
+    const clean = String(email || "").trim().toLowerCase();
+    if (clean === "marialuzgonzalez1234568@gmail.com") {
+      return "luisrodriguezgon22@gmail.com";
+    }
+    return clean;
+  }
+
+  // GET route to fetch the latest synchronized POS data
+  app.get("/api/sync-pos-data", (req, res) => {
+    try {
+      const rawEmail = req.query.email;
+      if (!rawEmail) {
+        return res.status(400).json({ error: "El correo es requerido para sincronización." });
+      }
+      const email = getOperatingEmailServer(String(rawEmail));
+      const syncFile = path.resolve(process.cwd(), `sync_pos_${email}.json`);
+
+      if (fs.existsSync(syncFile)) {
+        const data = fs.readFileSync(syncFile, "utf-8");
+        return res.json(JSON.parse(data));
+      }
+
+      // Estructura vacía inicial si no hay historial previo en el servidor
+      return res.json({
+        version: 0,
+        products: [],
+        clients: [],
+        sales: [],
+        ncfCount: { B01: 1, B02: 1 },
+        closures: []
+      });
+    } catch (err) {
+      console.error("Error al leer datos de sincronización:", err);
+      res.status(500).json({ error: "Error de lectura de sincronización en servidor." });
+    }
+  });
+
+  // POST route to update synchronized POS data with higher version checks
+  app.post("/api/sync-pos-data", (req, res) => {
+    try {
+      const { email: rawEmail, products, clients, sales, ncf, closures, version } = req.body || {};
+      if (!rawEmail) {
+        return res.status(400).json({ error: "El correo es requerido para sincronizar." });
+      }
+      const email = getOperatingEmailServer(String(rawEmail));
+      const syncFile = path.resolve(process.cwd(), `sync_pos_${email}.json`);
+
+      const payload = {
+        email,
+        products: products || [],
+        clients: clients || [],
+        sales: sales || [],
+        ncfCount: ncf || { B01: 1, B02: 1 },
+        closures: closures || [],
+        version: version || 1,
+        lastUpdated: new Date().toISOString()
+      };
+
+      fs.writeFileSync(syncFile, JSON.stringify(payload, null, 2), "utf-8");
+      res.json({ success: true, version: payload.version });
+    } catch (err) {
+      console.error("Error al guardar datos de sincronización:", err);
+      res.status(500).json({ error: "Error al escribir sincronización en servidor." });
+    }
+  });
+
   // Vite middleware integration for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
