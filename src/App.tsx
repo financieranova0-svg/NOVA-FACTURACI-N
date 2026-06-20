@@ -27,7 +27,7 @@ import {
   UserMinus,
   UserPlus
 } from "lucide-react";
-import { Product, Client, Sale, DailyClosure, AppUser } from "./types";
+import { Product, Client, Sale, DailyClosure, AppUser, CustomReceipt } from "./types";
 import { INITIAL_PRODUCTS, INITIAL_CLIENTS } from "./data";
 import POS from "./components/POS";
 import Inventory from "./components/Inventory";
@@ -78,11 +78,19 @@ export default function App() {
   const [clients, setClients] = useState<Client[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [closures, setClosures] = useState<DailyClosure[]>([]);
+  const [receipts, setReceipts] = useState<CustomReceipt[]>([]);
   const [localVersion, setLocalVersion] = useState<number>(0);
   
   // Auth users management
   const [users, setUsers] = useState<AppUser[]>([]);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+
+  // States for instant background sync loading and password prompt
+  const [isLoadingSync, setIsLoadingSync] = useState(false);
+  const [inventoryUnlocked, setInventoryUnlocked] = useState(false);
+  const [showInventoryUnlockModal, setShowInventoryUnlockModal] = useState(false);
+  const [inventoryPassword, setInventoryPassword] = useState("");
+  const [inventoryUnlockError, setInventoryUnlockError] = useState("");
   
   // Sign-in values state
   const [authEmail, setAuthEmail] = useState("");
@@ -201,36 +209,34 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Protect employee from accessing inventory catalog
+  // Protect employee from accessing inventory catalog if not unlocked with password 7276
   useEffect(() => {
     if (currentUser) {
       const emailLower = currentUser.email.toLowerCase().trim();
-      if (emailLower === "marialuzgonzalez1234568@gmail.com" && activeTab === "inventory") {
+      if (emailLower === "marialuzgonzalez1234568@gmail.com" && activeTab === "inventory" && !inventoryUnlocked) {
         setActiveTab("pos");
       }
     }
-  }, [activeTab, currentUser]);
+  }, [activeTab, currentUser, inventoryUnlocked]);
 
-  // Sync state whenever logged currentUser changes to support Isolation
+  // Sync state whenever logged currentUser changes to support Isolation & Cloud Restoration
   useEffect(() => {
     if (!currentUser) {
       setProducts([]);
       setClients([]);
       setSales([]);
       setClosures([]);
+      setReceipts([]);
       setNcfCounts({ B01: 1, B02: 1 });
       setLocalVersion(0);
       return;
     }
 
-    try {
-      const email = getOperatingEmail(currentUser.email);
-      const isDemoAdmin = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
+    const email = getOperatingEmail(currentUser.email);
+    const isDemoAdmin = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
 
-      // Version Isolation
-      const storedVersion = localStorage.getItem(`factura_pos_version_${email}`);
-      setLocalVersion(storedVersion ? Number(storedVersion) : 0);
-
+    // Helper to load whatever is currently inside localStorage (or default arrays if none exists)
+    const loadLocalData = () => {
       // Products Isolation
       const storedProducts = localStorage.getItem(`factura_pos_products_${email}`);
       if (storedProducts) {
@@ -323,9 +329,73 @@ export default function App() {
         localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify([]));
       }
 
-    } catch (e) {
-      console.error("Error al aislar BD para usuario", e);
-    }
+      // Receipts Isolation
+      const storedReceipts = localStorage.getItem(`factura_pos_custom_receipts_${email}`);
+      if (storedReceipts) {
+        setReceipts(JSON.parse(storedReceipts));
+      } else {
+        setReceipts([]);
+        localStorage.setItem(`factura_pos_custom_receipts_${email}`, JSON.stringify([]));
+      }
+
+      // Version Isolation
+      const storedVersion = localStorage.getItem(`factura_pos_version_${email}`);
+      setLocalVersion(storedVersion ? Number(storedVersion) : 0);
+    };
+
+    const fetchInitialData = async () => {
+      const isOnline = typeof window !== "undefined" && window.navigator.onLine;
+      if (!isOnline) {
+        loadLocalData();
+        return;
+      }
+
+      setIsLoadingSync(true);
+      try {
+        const res = await fetch(`/api/sync-pos-data?email=${encodeURIComponent(email)}`);
+        if (res.ok) {
+          const data = await res.json();
+          const serverVersion = data.version || 0;
+
+          // Check if local storage has any existing version at all
+          const hasLocalData = localStorage.getItem(`factura_pos_version_${email}`) !== null;
+          const storedVersion = localStorage.getItem(`factura_pos_version_${email}`);
+          const currentLocalVer = storedVersion ? Number(storedVersion) : 0;
+
+          // If server has a higher version, OR we simply have NO local storage data for this user 
+          // (such as on a new device/browser or after clearing cache), IMMEDIATELY pull server data.
+          if (serverVersion > currentLocalVer || !hasLocalData) {
+            setProducts(data.products || []);
+            setClients(data.clients || []);
+            setSales(data.sales || []);
+            setClosures(data.closures || []);
+            setReceipts(data.receipts || []);
+            setNcfCounts(data.ncfCount || { B01: 1, B02: 1 });
+            setLocalVersion(serverVersion);
+
+            localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(data.products || []));
+            localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(data.clients || []));
+            localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify(data.sales || []));
+            localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify(data.closures || []));
+            localStorage.setItem(`factura_pos_custom_receipts_${email}`, JSON.stringify(data.receipts || []));
+            localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(data.ncfCount || { B01: 1, B02: 1 }));
+            localStorage.setItem(`factura_pos_version_${email}`, String(serverVersion));
+          } else {
+            // Otherwise, load our local data which is up to date or newer
+            loadLocalData();
+          }
+        } else {
+          loadLocalData();
+        }
+      } catch (e) {
+        console.error("Falla al recuperar datos iniciales en nube:", e);
+        loadLocalData();
+      } finally {
+        setIsLoadingSync(false);
+      }
+    };
+
+    fetchInitialData();
   }, [currentUser]);
 
   // Real-time synchronization loop for POS lists when online
@@ -354,12 +424,14 @@ export default function App() {
           setClients(data.clients || []);
           setSales(data.sales || []);
           setClosures(data.closures || []);
+          setReceipts(data.receipts || []);
           setNcfCounts(data.ncfCount || { B01: 1, B02: 1 });
 
           localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(data.products || []));
           localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(data.clients || []));
           localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify(data.sales || []));
           localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify(data.closures || []));
+          localStorage.setItem(`factura_pos_custom_receipts_${email}`, JSON.stringify(data.receipts || []));
           localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(data.ncfCount || { B01: 1, B02: 1 }));
           
           setLocalVersion(serverVersion);
@@ -376,6 +448,7 @@ export default function App() {
               sales: JSON.parse(localStorage.getItem(`factura_pos_sales_${email}`) || "[]"),
               ncf: JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1}'),
               closures: JSON.parse(localStorage.getItem(`factura_pos_closures_${email}`) || "[]"),
+              receipts: JSON.parse(localStorage.getItem(`factura_pos_custom_receipts_${email}`) || "[]"),
               version: currentLocalVer
             })
           });
@@ -440,6 +513,17 @@ export default function App() {
     if (currentUser) {
       const email = getOperatingEmail(currentUser.email);
       localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify(updatedClosures));
+      const newVer = localVersion + 1;
+      setLocalVersion(newVer);
+      localStorage.setItem(`factura_pos_version_${email}`, String(newVer));
+    }
+  };
+
+  const saveReceiptsToStorage = (updatedReceipts: CustomReceipt[]) => {
+    setReceipts(updatedReceipts);
+    if (currentUser) {
+      const email = getOperatingEmail(currentUser.email);
+      localStorage.setItem(`factura_pos_custom_receipts_${email}`, JSON.stringify(updatedReceipts));
       const newVer = localVersion + 1;
       setLocalVersion(newVer);
       localStorage.setItem(`factura_pos_version_${email}`, String(newVer));
@@ -739,6 +823,8 @@ export default function App() {
     setAuthEmail("");
     setAuthPhone("");
     setAuthMessage("");
+    setInventoryUnlocked(false);
+    setShowInventoryUnlockModal(false);
     setActiveTab("pos");
   };
 
@@ -754,22 +840,25 @@ export default function App() {
       localStorage.removeItem(`factura_pos_sales_${email}`);
       localStorage.removeItem(`factura_pos_ncf_${email}`);
       localStorage.removeItem(`factura_pos_closures_${email}`);
+      localStorage.removeItem(`factura_pos_custom_receipts_${email}`);
       localStorage.removeItem(`factura_pos_version_${email}`);
       
       const defaultProducts = isDemoAdmin ? INITIAL_PRODUCTS : [];
       const defaultClients = isDemoAdmin ? INITIAL_CLIENTS : [];
-
+  
       setProducts(defaultProducts);
       setClients(defaultClients);
       setSales([]);
       setNcfCounts({ B01: 1, B02: 1 });
       setClosures([]);
+      setReceipts([]);
       
       localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(defaultProducts));
       localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(defaultClients));
       localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify([]));
       localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify({ B01: 1, B02: 1 }));
       localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify([]));
+      localStorage.setItem(`factura_pos_custom_receipts_${email}`, JSON.stringify([]));
 
       // Increment local version to push the clean reset to the server and sync the other nodes
       const newVer = localVersion + 1;
@@ -1003,23 +1092,31 @@ export default function App() {
             Caja POS Rápida
           </button>
 
-          {currentUser?.email.toLowerCase().trim() !== "marialuzgonzalez1234568@gmail.com" && (
-            <button
-              id="tab-inventory"
-              onClick={() => {
+          <button
+            id="tab-inventory"
+            onClick={() => {
+              const isEmployee = currentUser?.email.toLowerCase().trim() === "marialuzgonzalez1234568@gmail.com";
+              if (isEmployee && !inventoryUnlocked) {
+                setInventoryUnlockError("");
+                setInventoryPassword("");
+                setShowInventoryUnlockModal(true);
+              } else {
                 setActiveTab("inventory");
                 setReprintSale(null); // safely dismiss overlay
-              }}
-              className={`py-3.5 px-4.5 text-xs font-black flex items-center gap-1.5 border-b-2 transition duration-150 shrink-0 uppercase cursor-pointer ${
-                activeTab === "inventory"
-                  ? "border-emerald-600 text-emerald-700"
-                  : "border-transparent text-slate-500 hover:text-slate-850 hover:border-slate-300"
-              }`}
-            >
-              <Layers className="h-4 w-4" />
-              Catálogo Inventario
-            </button>
-          )}
+              }
+            }}
+            className={`py-3.5 px-4.5 text-xs font-black flex items-center gap-1.5 border-b-2 transition duration-150 shrink-0 uppercase cursor-pointer relative ${
+              activeTab === "inventory"
+                ? "border-emerald-600 text-emerald-700 font-black"
+                : "border-transparent text-slate-500 hover:text-slate-850 hover:border-slate-300"
+            }`}
+          >
+            <Layers className="h-4 w-4" />
+            Catálogo Inventario
+            {currentUser?.email.toLowerCase().trim() === "marialuzgonzalez1234568@gmail.com" && !inventoryUnlocked && (
+              <Lock className="h-3.5 w-3.5 text-amber-500 animate-pulse ml-1 shrink-0" />
+            )}
+          </button>
 
           <button
             id="tab-clients"
@@ -1570,6 +1667,8 @@ export default function App() {
             currentUser={currentUser}
             clients={clients}
             products={products}
+            receiptsList={receipts}
+            onSaveReceipts={saveReceiptsToStorage}
           />
         )}
       </main>
@@ -1982,6 +2081,94 @@ export default function App() {
               </button>
             </div>
             <p className="text-[10px] text-slate-400 mt-2 text-center">Tip: Para guardar como PDF, elija "Guardar como PDF / Microsoft Print to PDF" en la ventana de impresión.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Loading Synchronization Overlay */}
+      {isLoadingSync && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 text-center select-none">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
+            <div className="relative flex items-center justify-center">
+              <div className="h-12 w-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
+              <Lock className="h-4 w-4 text-emerald-400 absolute animate-pulse" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-white font-black text-sm uppercase tracking-wider">Sincronizando Cuenta</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Estamos descargando todos tus registros, productos y datos sincronizados desde la nube de forma segura...
+              </p>
+            </div>
+            <div className="text-[10px] text-emerald-400/70 font-mono animate-pulse">
+              CONEXIÓN CIFRADA ESTABLECIDA
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inventory Unlock Modal for Employee */}
+      {showInventoryUnlockModal && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 text-center">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
+            <div className="w-12 h-12 bg-amber-500/10 text-amber-500 rounded-full flex items-center justify-center mx-auto">
+              <Lock className="h-5 w-5 stroke-2" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-white font-black text-sm uppercase tracking-tight">Apartado Bloqueado</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Este apartado de inventario requiere autorización. Ingrese la contraseña de seguridad para continuar.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <input
+                type="password"
+                placeholder="Contraseña de autorización"
+                value={inventoryPassword}
+                onChange={(e) => {
+                  setInventoryPassword(e.target.value);
+                  setInventoryUnlockError("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const btn = document.getElementById("btn-unlock-inventory");
+                    btn?.click();
+                  }
+                }}
+                className="w-full text-center tracking-[0.5em] px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg text-white focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500 font-mono font-bold"
+                autoFocus
+              />
+              {inventoryUnlockError && (
+                <p className="text-rose-400 text-[11px] font-semibold">{inventoryUnlockError}</p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setShowInventoryUnlockModal(false);
+                  setInventoryPassword("");
+                  setInventoryUnlockError("");
+                }}
+                className="flex-1 py-1.5 border border-slate-700 hover:bg-slate-800 text-slate-300 font-bold text-xs rounded-lg transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                id="btn-unlock-inventory"
+                onClick={() => {
+                  if (inventoryPassword.trim() === "7276") {
+                    setInventoryUnlocked(true);
+                    setShowInventoryUnlockModal(false);
+                    setActiveTab("inventory");
+                    setInventoryPassword("");
+                  } else {
+                    setInventoryUnlockError("Contraseña incorrecta. Inténtelo de nuevo.");
+                  }
+                }}
+                className="flex-1 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-lg transition cursor-pointer"
+              >
+                Desbloquear
+              </button>
+            </div>
           </div>
         </div>
       )}

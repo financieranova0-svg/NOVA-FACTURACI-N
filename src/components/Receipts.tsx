@@ -22,7 +22,7 @@ import {
   Briefcase,
   Camera
 } from "lucide-react";
-import { Client, Product, AppUser } from "../types";
+import { Client, Product, AppUser, CustomReceipt } from "../types";
 import { getBusinessConfig, BusinessConfig } from "../utils/pdfGenerator";
 import { jsPDF } from "jspdf";
 
@@ -30,54 +30,20 @@ interface ReceiptsProps {
   currentUser: AppUser | null;
   clients: Client[];
   products: Product[];
+  receiptsList: CustomReceipt[];
+  onSaveReceipts: (updated: CustomReceipt[]) => void;
 }
 
-interface CustomReceipt {
-  id: string;
-  type: "cuota" | "completo" | "inicio";
-  receiptNumber: string;
-  date: string;
+export default function Receipts({ currentUser, clients, products, receiptsList, onSaveReceipts }: ReceiptsProps) {
+  const getOperatingEmailLocal = (email: string) => {
+    const clean = String(email || "").trim().toLowerCase();
+    if (clean === "marialuzgonzalez1234568@gmail.com") {
+      return "luisrodriguezgon22@gmail.com";
+    }
+    return clean;
+  };
+  const userEmail = currentUser ? getOperatingEmailLocal(currentUser.email) : "default";
   
-  // Base fields
-  clientName: string;
-  clientCedula: string;
-  vendedor: string;
-  phone: string;
-  phone2: string;
-  rnc: string;
-  direccion: string;
-  
-  // Product info
-  productDescription: string;
-  productQty: number;
-  totalAmount: number;
-  hasItbis: boolean;
-  
-  // Type 1: Cuota / Abono specific
-  invoiceNumber: string;
-  abonoCuotas: number;
-  totalPagado: number;
-  totalRestante: number;
-  proximoPagoMonto: number;
-  proximoPagoFecha: string;
-  cuotasPagadas: string; // e.g. "1/7"
-  cuotasAtrasadas: number;
-  
-  // Type 3: Inicio de Financiamiento specific
-  montoInicial: number;
-  cantidadCuotas: number;
-  frecuenciaPago: "Semanal" | "Mensual" | "Anual";
-  montoPorCuota: number;
-  fiadorNombre: string;
-  fiadorCedula: string;
-  garantia: string;
-}
-
-export default function Receipts({ currentUser, clients, products }: ReceiptsProps) {
-  const userEmail = currentUser?.email || "default";
-  
-  // Local storage for keeping receipts list
-  const [receiptsList, setReceiptsList] = useState<CustomReceipt[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   
@@ -161,18 +127,6 @@ export default function Receipts({ currentUser, clients, products }: ReceiptsPro
     showBannerMessage("🎨 Logotipo del perfil guardado con éxito.");
   };
 
-  // Load receipts from Storage
-  useEffect(() => {
-    const stored = localStorage.getItem(`factura_pos_custom_receipts_${userEmail}`);
-    if (stored) {
-      try {
-        setReceiptsList(JSON.parse(stored));
-      } catch (e) {
-        console.error(e);
-      }
-    }
-  }, [userEmail]);
-
   // Helper trigger messages safely
   const showBannerMessage = (msg: string) => {
     setSuccessMsg(msg);
@@ -183,8 +137,7 @@ export default function Receipts({ currentUser, clients, products }: ReceiptsPro
 
   // Safe save receipts
   const saveReceiptsToStorage = (updated: CustomReceipt[]) => {
-    setReceiptsList(updated);
-    localStorage.setItem(`factura_pos_custom_receipts_${userEmail}`, JSON.stringify(updated));
+    onSaveReceipts(updated);
   };
 
   // Set form helper when choosing existing client

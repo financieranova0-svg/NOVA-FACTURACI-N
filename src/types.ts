@@ -70,3 +70,44 @@ export interface AppUser {
   expiresAt: string; // ISO date string or "forever"
   status: "active" | "suspended";
 }
+
+export interface CustomReceipt {
+  id: string;
+  type: "cuota" | "completo" | "inicio";
+  receiptNumber: string;
+  date: string;
+  
+  // Base fields
+  clientName: string;
+  clientCedula: string;
+  vendedor: string;
+  phone: string;
+  phone2: string;
+  rnc: string;
+  direccion: string;
+  
+  // Product info
+  productDescription: string;
+  productQty: number;
+  totalAmount: number;
+  hasItbis: boolean;
+  
+  // Type 1: Cuota / Abono specific
+  invoiceNumber: string;
+  abonoCuotas: number;
+  totalPagado: number;
+  totalRestante: number;
+  proximoPagoMonto: number;
+  proximoPagoFecha: string;
+  cuotasPagadas: string; // e.g. "1/7"
+  cuotasAtrasadas: number;
+  
+  // Type 3: Inicio de Financiamiento specific
+  montoInicial: number;
+  cantidadCuotas: number;
+  frecuenciaPago: "Semanal" | "Mensual" | "Anual";
+  montoPorCuota: number;
+  fiadorNombre: string;
+  fiadorCedula: string;
+  garantia: string;
+}

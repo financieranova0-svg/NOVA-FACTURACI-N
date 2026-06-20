@@ -289,7 +289,11 @@ async function startServer() {
 
       if (fs.existsSync(syncFile)) {
         const data = fs.readFileSync(syncFile, "utf-8");
-        return res.json(JSON.parse(data));
+        const parsed = JSON.parse(data);
+        if (!parsed.receipts) {
+          parsed.receipts = [];
+        }
+        return res.json(parsed);
       }
 
       // Estructura vacía inicial si no hay historial previo en el servidor
@@ -299,7 +303,8 @@ async function startServer() {
         clients: [],
         sales: [],
         ncfCount: { B01: 1, B02: 1 },
-        closures: []
+        closures: [],
+        receipts: []
       });
     } catch (err) {
       console.error("Error al leer datos de sincronización:", err);
@@ -310,7 +315,7 @@ async function startServer() {
   // POST route to update synchronized POS data with higher version checks
   app.post("/api/sync-pos-data", (req, res) => {
     try {
-      const { email: rawEmail, products, clients, sales, ncf, closures, version } = req.body || {};
+      const { email: rawEmail, products, clients, sales, ncf, closures, receipts, version } = req.body || {};
       if (!rawEmail) {
         return res.status(400).json({ error: "El correo es requerido para sincronizar." });
       }
@@ -324,6 +329,7 @@ async function startServer() {
         sales: sales || [],
         ncfCount: ncf || { B01: 1, B02: 1 },
         closures: closures || [],
+        receipts: receipts || [],
         version: version || 1,
         lastUpdated: new Date().toISOString()
       };
