@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { listenUserDataFromFirestore, saveUserDataToFirestore } from "./utils/firebase";
 import { 
   Store, 
   ShoppingCart, 
@@ -80,6 +81,7 @@ export default function App() {
   const [closures, setClosures] = useState<DailyClosure[]>([]);
   const [receipts, setReceipts] = useState<CustomReceipt[]>([]);
   const [localVersion, setLocalVersion] = useState<number>(0);
+  const lastFetchedVersionRef = useRef<number>(0);
   
   // Auth users management
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -209,11 +211,15 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Protect employee from accessing inventory catalog if not unlocked with password 7276
+  // Protect employee and owner (luisrodriguezgon22) from accessing inventory catalog if not unlocked with password 7276
   useEffect(() => {
     if (currentUser) {
       const emailLower = currentUser.email.toLowerCase().trim();
-      if (emailLower === "marialuzgonzalez1234568@gmail.com" && activeTab === "inventory" && !inventoryUnlocked) {
+      const phoneClean = (currentUser.phone || "").replace(/\D/g, "");
+      const isInventoryLockedUser = emailLower === "marialuzgonzalez1234568@gmail.com" ||
+        (emailLower === "luisrodriguezgon22@gmail.com" && phoneClean === "8298795652");
+
+      if (isInventoryLockedUser && activeTab === "inventory" && !inventoryUnlocked) {
         setActiveTab("pos");
       }
     }
@@ -232,65 +238,49 @@ export default function App() {
       return;
     }
 
-    const email = getOperatingEmail(currentUser.email);
-    const isDemoAdmin = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
+  }, [currentUser]);
 
-    // Helper to load whatever is currently inside localStorage (or default arrays if none exists)
-    const loadLocalData = () => {
-      // Products Isolation
+  // Real-time Cloud Synchronization using Firestore with offline first support
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    const email = getOperatingEmail(currentUser.email);
+    setIsLoadingSync(true);
+
+    const loadLocalDataOnly = () => {
+      // Local Products Isolation
       const storedProducts = localStorage.getItem(`factura_pos_products_${email}`);
       if (storedProducts) {
-        try {
-          const parsed = JSON.parse(storedProducts);
-          if (Array.isArray(parsed)) {
-            const migrated = parsed.map((p: any) => {
-              if (p.costPrice === undefined || p.costPrice === null || isNaN(Number(p.costPrice)) || Number(p.costPrice) < 0) {
-                return { ...p, costPrice: 0 };
-              }
-              return p;
-            });
-            setProducts(migrated);
-            localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(migrated));
-          } else {
-            setProducts([]);
-          }
-        } catch (e) {
-          console.error("Error migrating products", e);
-          setProducts([]);
-        }
+        setProducts(JSON.parse(storedProducts));
       } else {
-        const defaultProducts = isDemoAdmin ? INITIAL_PRODUCTS : [];
-        setProducts(defaultProducts);
-        localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(defaultProducts));
+        const emailLower = email.toLowerCase().trim();
+        const isDemoAdmin = emailLower === "financieranova0@gmail.com" || emailLower === "christheriault880@gmail.com";
+        setProducts(isDemoAdmin ? INITIAL_PRODUCTS : []);
+        localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(isDemoAdmin ? INITIAL_PRODUCTS : []));
       }
 
-      // Clients Isolation
+      // Local Clients Isolation
       const storedClients = localStorage.getItem(`factura_pos_clients_${email}`);
       if (storedClients) {
         setClients(JSON.parse(storedClients));
       } else {
-        const defaultClients = isDemoAdmin ? INITIAL_CLIENTS : [];
-        setClients(defaultClients);
-        localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(defaultClients));
+        const emailLower = email.toLowerCase().trim();
+        const isDemoAdmin = emailLower === "financieranova0@gmail.com" || emailLower === "christheriault880@gmail.com";
+        setClients(isDemoAdmin ? INITIAL_CLIENTS : []);
+        localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(isDemoAdmin ? INITIAL_CLIENTS : []));
       }
 
-      // Sales Isolation
+      // Local Sales Migration / Isolation
       const storedSales = localStorage.getItem(`factura_pos_sales_${email}`);
       if (storedSales) {
         try {
-          const parsed = JSON.parse(storedSales);
-          if (Array.isArray(parsed)) {
-            const migrated = parsed.map((sale: any) => {
+          const parsedSales = JSON.parse(storedSales);
+          if (Array.isArray(parsedSales)) {
+            const migrated = parsedSales.map((sale: any) => {
+              if (!sale.items) return sale;
               const updatedItems = sale.items.map((item: any) => {
-                const prod = item.product;
-                if (prod.costPrice === undefined || prod.costPrice === null || isNaN(Number(prod.costPrice)) || Number(prod.costPrice) < 0) {
-                  return {
-                    ...item,
-                    product: {
-                      ...prod,
-                      costPrice: 0
-                    }
-                  };
+                if (typeof item.id === "string" && !item.productId) {
+                  item.productId = item.id;
                 }
                 return item;
               });
@@ -343,89 +333,53 @@ export default function App() {
       setLocalVersion(storedVersion ? Number(storedVersion) : 0);
     };
 
-    const fetchInitialData = async () => {
-      const isOnline = typeof window !== "undefined" && window.navigator.onLine;
-      if (!isOnline) {
-        loadLocalData();
-        return;
-      }
-
-      setIsLoadingSync(true);
-      try {
-        const res = await fetch(`/api/sync-pos-data?email=${encodeURIComponent(email)}`);
-        if (res.ok) {
-          const data = await res.json();
-          const serverVersion = data.version || 0;
-
-          // Check if local storage has any existing version at all
-          const hasLocalData = localStorage.getItem(`factura_pos_version_${email}`) !== null;
-          const storedVersion = localStorage.getItem(`factura_pos_version_${email}`);
-          const currentLocalVer = storedVersion ? Number(storedVersion) : 0;
-
-          // If server has a higher version, OR we simply have NO local storage data for this user 
-          // (such as on a new device/browser or after clearing cache), IMMEDIATELY pull server data.
-          if (serverVersion > currentLocalVer || !hasLocalData) {
-            setProducts(data.products || []);
-            setClients(data.clients || []);
-            setSales(data.sales || []);
-            setClosures(data.closures || []);
-            setReceipts(data.receipts || []);
-            setNcfCounts(data.ncfCount || { B01: 1, B02: 1 });
-            setLocalVersion(serverVersion);
-
-            localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(data.products || []));
-            localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(data.clients || []));
-            localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify(data.sales || []));
-            localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify(data.closures || []));
-            localStorage.setItem(`factura_pos_custom_receipts_${email}`, JSON.stringify(data.receipts || []));
-            localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(data.ncfCount || { B01: 1, B02: 1 }));
-            localStorage.setItem(`factura_pos_version_${email}`, String(serverVersion));
-          } else {
-            // Otherwise, load our local data which is up to date or newer
-            loadLocalData();
-          }
-        } else {
-          loadLocalData();
-        }
-      } catch (e) {
-        console.error("Falla al recuperar datos iniciales en nube:", e);
-        loadLocalData();
-      } finally {
+    // Listen to real-time additions/modifications in Firestore
+    const unsubscribe = listenUserDataFromFirestore(
+      email,
+      (data, fromCache) => {
         setIsLoadingSync(false);
-      }
-    };
 
-    fetchInitialData();
-  }, [currentUser]);
+        const storedLocalVersionStr = localStorage.getItem(`factura_pos_version_${email}`);
+        const currentLocalVer = storedLocalVersionStr ? Number(storedLocalVersionStr) : 0;
+        const hasLocalData = localStorage.getItem(`factura_pos_version_${email}`) !== null;
 
-  // Real-time synchronization loop for POS lists when online
-  useEffect(() => {
-    if (!currentUser) return;
-    
-    // Skip sync if offline
-    if (typeof window !== "undefined" && !window.navigator.onLine) return;
+        if (!data) {
+          // Document does not exist on Firestore.
+          // If we have some local data, sync it up initially to provision the cloud database.
+          if (hasLocalData && currentLocalVer > 0) {
+            const localProducts = JSON.parse(localStorage.getItem(`factura_pos_products_${email}`) || "[]");
+            const localClients = JSON.parse(localStorage.getItem(`factura_pos_clients_${email}`) || "[]");
+            const localSales = JSON.parse(localStorage.getItem(`factura_pos_sales_${email}`) || "[]");
+            const localNcf = JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1}');
+            const localClosures = JSON.parse(localStorage.getItem(`factura_pos_closures_${email}`) || "[]");
+            const localReceipts = JSON.parse(localStorage.getItem(`factura_pos_custom_receipts_${email}`) || "[]");
 
-    const email = getOperatingEmail(currentUser.email);
+            saveUserDataToFirestore(email, {
+              products: localProducts,
+              clients: localClients,
+              sales: localSales,
+              ncfCount: localNcf,
+              closures: localClosures,
+              receipts: localReceipts,
+              version: currentLocalVer
+            });
+            lastFetchedVersionRef.current = currentLocalVer;
+          }
+          loadLocalDataOnly();
+          return;
+        }
 
-    const performSync = async () => {
-      try {
-        const res = await fetch(`/api/sync-pos-data?email=${encodeURIComponent(email)}`);
-        if (!res.ok) return;
-        const data = await res.json();
         const serverVersion = data.version || 0;
 
-        // Obtain local version state again safely
-        const storedLocal = localStorage.getItem(`factura_pos_version_${email}`);
-        const currentLocalVer = storedLocal ? Number(storedLocal) : 0;
-
-        if (serverVersion > currentLocalVer) {
-          // Server has newer data. Bring it down!
+        // If server version is strictly newer OR we have absolutely no local state, pull.
+        if (serverVersion > currentLocalVer || !hasLocalData) {
           setProducts(data.products || []);
           setClients(data.clients || []);
           setSales(data.sales || []);
           setClosures(data.closures || []);
           setReceipts(data.receipts || []);
           setNcfCounts(data.ncfCount || { B01: 1, B02: 1 });
+          setLocalVersion(serverVersion);
 
           localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(data.products || []));
           localStorage.setItem(`factura_pos_clients_${email}`, JSON.stringify(data.clients || []));
@@ -433,35 +387,109 @@ export default function App() {
           localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify(data.closures || []));
           localStorage.setItem(`factura_pos_custom_receipts_${email}`, JSON.stringify(data.receipts || []));
           localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(data.ncfCount || { B01: 1, B02: 1 }));
-          
-          setLocalVersion(serverVersion);
           localStorage.setItem(`factura_pos_version_${email}`, String(serverVersion));
+          
+          lastFetchedVersionRef.current = serverVersion;
         } else if (currentLocalVer > serverVersion) {
-          // Local has newer data. Push up!
+          // Local is newer. Push up!
+          const localProducts = JSON.parse(localStorage.getItem(`factura_pos_products_${email}`) || "[]");
+          const localClients = JSON.parse(localStorage.getItem(`factura_pos_clients_${email}`) || "[]");
+          const localSales = JSON.parse(localStorage.getItem(`factura_pos_sales_${email}`) || "[]");
+          const localNcf = JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1}');
+          const localClosures = JSON.parse(localStorage.getItem(`factura_pos_closures_${email}`) || "[]");
+          const localReceipts = JSON.parse(localStorage.getItem(`factura_pos_custom_receipts_${email}`) || "[]");
+
+          saveUserDataToFirestore(email, {
+            products: localProducts,
+            clients: localClients,
+            sales: localSales,
+            ncfCount: localNcf,
+            closures: localClosures,
+            receipts: localReceipts,
+            version: currentLocalVer
+          });
+          lastFetchedVersionRef.current = currentLocalVer;
+          loadLocalDataOnly();
+        } else {
+          // Versions are synchronized. Just load local cache.
+          lastFetchedVersionRef.current = serverVersion;
+          loadLocalDataOnly();
+        }
+      },
+      (err) => {
+        console.error("Firestore real-time subscription error:", err);
+        loadLocalDataOnly();
+        setIsLoadingSync(false);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [currentUser]);
+
+  // Effect to automatically push local edits (detected by localVersion change) to Firestore & REST server
+  useEffect(() => {
+    if (!currentUser) return;
+    const email = getOperatingEmail(currentUser.email);
+
+    const handleLocalChangePush = async () => {
+      const storedVersionStr = localStorage.getItem(`factura_pos_version_${email}`);
+      const currentVer = storedVersionStr ? Number(storedVersionStr) : 0;
+      if (currentVer === 0) return;
+
+      // Prevent redundant pushes of versions we just got from the cloud listener
+      if (currentVer <= lastFetchedVersionRef.current) {
+        return;
+      }
+
+      const localProducts = JSON.parse(localStorage.getItem(`factura_pos_products_${email}`) || "[]");
+      const localClients = JSON.parse(localStorage.getItem(`factura_pos_clients_${email}`) || "[]");
+      const localSales = JSON.parse(localStorage.getItem(`factura_pos_sales_${email}`) || "[]");
+      const localNcf = JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1}');
+      const localClosures = JSON.parse(localStorage.getItem(`factura_pos_closures_${email}`) || "[]");
+      const localReceipts = JSON.parse(localStorage.getItem(`factura_pos_custom_receipts_${email}`) || "[]");
+
+      // Push to Firestore (handles offline queueing transparently!)
+      await saveUserDataToFirestore(email, {
+        products: localProducts,
+        clients: localClients,
+        sales: localSales,
+        ncfCount: localNcf,
+        closures: localClosures,
+        receipts: localReceipts,
+        version: currentVer
+      });
+
+      // Update our ref so we know this push is safe & acknowledged
+      lastFetchedVersionRef.current = currentVer;
+
+      // Push a backup to the REST backend server if we are online
+      if (typeof window !== "undefined" && window.navigator.onLine) {
+        try {
           await fetch("/api/sync-pos-data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               email,
-              products: JSON.parse(localStorage.getItem(`factura_pos_products_${email}`) || "[]"),
-              clients: JSON.parse(localStorage.getItem(`factura_pos_clients_${email}`) || "[]"),
-              sales: JSON.parse(localStorage.getItem(`factura_pos_sales_${email}`) || "[]"),
-              ncf: JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1}'),
-              closures: JSON.parse(localStorage.getItem(`factura_pos_closures_${email}`) || "[]"),
-              receipts: JSON.parse(localStorage.getItem(`factura_pos_custom_receipts_${email}`) || "[]"),
-              version: currentLocalVer
+              products: localProducts,
+              clients: localClients,
+              sales: localSales,
+              ncf: localNcf,
+              closures: localClosures,
+              receipts: localReceipts,
+              version: currentVer
             })
           });
+        } catch (error) {
+          console.warn("Express server backup sync temporarily skipped (offline/busy):", error);
         }
-      } catch (err) {
-        console.error("Error in real-time background sync loop:", err);
       }
     };
 
-    performSync(); // run initially
-    const syncInterval = setInterval(performSync, 6000); // Poll and push every 6 seconds
-    return () => clearInterval(syncInterval);
-  }, [currentUser, localVersion]);
+    handleLocalChangePush();
+  }, [localVersion, currentUser]);
+
 
   // Helper sync triggers to localstorage per user-key
   const saveProductsToStorage = (updatedProducts: Product[]) => {
@@ -1095,8 +1123,12 @@ export default function App() {
           <button
             id="tab-inventory"
             onClick={() => {
-              const isEmployee = currentUser?.email.toLowerCase().trim() === "marialuzgonzalez1234568@gmail.com";
-              if (isEmployee && !inventoryUnlocked) {
+              const emailLower = currentUser?.email.toLowerCase().trim() || "";
+              const phoneClean = (currentUser?.phone || "").replace(/\D/g, "");
+              const isInventoryLockedUser = emailLower === "marialuzgonzalez1234568@gmail.com" ||
+                (emailLower === "luisrodriguezgon22@gmail.com" && phoneClean === "8298795652");
+
+              if (isInventoryLockedUser && !inventoryUnlocked) {
                 setInventoryUnlockError("");
                 setInventoryPassword("");
                 setShowInventoryUnlockModal(true);
@@ -1113,8 +1145,16 @@ export default function App() {
           >
             <Layers className="h-4 w-4" />
             Catálogo Inventario
-            {currentUser?.email.toLowerCase().trim() === "marialuzgonzalez1234568@gmail.com" && !inventoryUnlocked && (
-              <Lock className="h-3.5 w-3.5 text-amber-500 animate-pulse ml-1 shrink-0" />
+            {currentUser && (
+              (() => {
+                const emailLower = currentUser.email.toLowerCase().trim();
+                const phoneClean = (currentUser.phone || "").replace(/\D/g, "");
+                const isInventoryLockedUser = emailLower === "marialuzgonzalez1234568@gmail.com" ||
+                  (emailLower === "luisrodriguezgon22@gmail.com" && phoneClean === "8298795652");
+                return isInventoryLockedUser && !inventoryUnlocked && (
+                  <Lock className="h-3.5 w-3.5 text-amber-500 animate-pulse ml-1 shrink-0" />
+                );
+              })()
             )}
           </button>
 

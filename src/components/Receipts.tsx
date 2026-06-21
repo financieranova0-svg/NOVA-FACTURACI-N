@@ -23,7 +23,7 @@ import {
   Camera
 } from "lucide-react";
 import { Client, Product, AppUser, CustomReceipt } from "../types";
-import { getBusinessConfig, BusinessConfig } from "../utils/pdfGenerator";
+import { getBusinessConfig, BusinessConfig, generateReceiptsListPDF } from "../utils/pdfGenerator";
 import { jsPDF } from "jspdf";
 
 interface ReceiptsProps {
@@ -236,6 +236,39 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
     setFiadorNombre("");
     setFiadorCedula("");
     showBannerMessage("🧹 Formulario restablecido vacío");
+  };
+
+  const handleDownloadListPDF = () => {
+    const config = getBusinessConfig(userEmail);
+    const blob = generateReceiptsListPDF(receiptsList, config);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Recibos_Cobros-${config.name.replace(/\s+/g, "_")}-${new Date().toISOString().substring(0, 10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleShareListWhatsApp = () => {
+    const config = getBusinessConfig(userEmail);
+    const totalReceiptsAmount = receiptsList.reduce((acc, r) => acc + (r.totalAmount || 0), 0);
+    const textHeader = `*${config.name.toUpperCase()} - REPORTE DE RECIBOS DE COBROS*\n`;
+    const textMeta = `_Generado: ${new Date().toLocaleDateString("es-DO")}_\n` +
+                     `_Total recibos: ${receiptsList.length}_\n` +
+                     `===================================\n`;
+    
+    const recentLines = receiptsList.slice(0, 15).map(r => {
+      return `• Recibo: *${r.receiptNumber}* | ${r.clientName.toUpperCase()}\n  Concepto: _${r.productDescription.toUpperCase()}_\n  Monto: *RD$ ${r.totalAmount.toLocaleString()}* (${r.type.toUpperCase()})`;
+    }).join("\n\n");
+
+    const textFooter = `\n===================================\n` +
+                       `*MONTO TOTAL RECAUDADO:* RD$ ${totalReceiptsAmount.toLocaleString("es-DO")}/DOP\n\n` +
+                       `¡Control de Cobros Digital Nova!`;
+
+    const fullMsg = textHeader + textMeta + (recentLines || "• No hay recibos de pagos registrados.") + textFooter;
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(fullMsg)}`, "_blank");
   };
 
   // Live total calculations
@@ -821,6 +854,26 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
         
         <div className="flex flex-wrap items-center gap-2">
           <button
+            id="btn-receipts-pdf"
+            onClick={handleDownloadListPDF}
+            className="px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/60 rounded-xl transition duration-150 cursor-pointer flex items-center gap-1"
+            title="Descargar Relación de Recibos en PDF"
+          >
+            <FileText className="h-4 w-4" />
+            <span>Ver PDF</span>
+          </button>
+          
+          <button
+            id="btn-receipts-whatsapp"
+            onClick={handleShareListWhatsApp}
+            className="px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/60 rounded-xl transition duration-150 cursor-pointer flex items-center gap-1"
+            title="Enviar Relación de Recibos por WhatsApp"
+          >
+            <Send className="h-4 w-4" />
+            <span>WhatsApp</span>
+          </button>
+
+          <button
             onClick={handleAutoFillDemo}
             className="px-3.5 py-2 text-xs font-bold text-emerald-850 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/60 rounded-xl transition duration-150 cursor-pointer flex items-center gap-1.5"
           >
@@ -833,7 +886,7 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
             className="px-3.5 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 rounded-xl transition duration-150 cursor-pointer flex items-center gap-1.5"
           >
             <RotateCcw className="h-3.5 w-3.5" />
-            Limpiar Todo
+            Limpiar
           </button>
         </div>
       </div>

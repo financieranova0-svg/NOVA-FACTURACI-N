@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "UserData": {
+      "title": "UserData",
+      "description": "User specific application data including POS inventory, clients, sales, and counters",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "The lowercase operating email of the user"
+        },
+        "products": {
+          "type": "array",
+          "description": "List of products/inventory belonging to the user"
+        },
+        "clients": {
+          "type": "array",
+          "description": "List of clients registered by the user"
+        },
+        "sales": {
+          "type": "array",
+          "description": "List of completed sales records"
+        },
+        "ncfCount": {
+          "type": "object",
+          "description": "Object tracking NCF sequences (e.g. B01, B02 counters)"
+        },
+        "closures": {
+          "type": "array",
+          "description": "List of cash drawer daily closures"
+        },
+        "receipts": {
+          "type": "array",
+          "description": "List of custom receipts templates"
+        },
+        "version": {
+          "type": "number",
+          "description": "The synchronization version sequence number"
+        },
+        "lastUpdated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp indicating when the document was last changed on a client"
+        }
+      },
+      "required": ["email", "version"]
+    }
+  },
+  "firestore": {
+    "/users_data/{email}": {
+      "schema": "UserData",
+      "description": "Direct isolated document per user containing all synced modules"
+    }
+  }
+}

@@ -15,9 +15,11 @@ import {
   FileText,
   Calendar,
   Layers,
-  Sparkles
+  Sparkles,
+  Send
 } from "lucide-react";
 import { Sale, Client, DailyClosure } from "../types";
+import { getBusinessConfig, generateSalesAndClosuresPDF } from "../utils/pdfGenerator";
 
 interface SalesHistoryProps {
   sales: Sale[];
@@ -47,6 +49,68 @@ export default function SalesHistory({
   const [activeSaleToAnnull, setActiveSaleToAnnull] = useState<Sale | null>(null);
   const [activeClosureIdToDelete, setActiveClosureIdToDelete] = useState<string | null>(null);
   const [customNotification, setCustomNotification] = useState<{ type: "success" | "info" | "error"; text: string } | null>(null);
+
+  const handleDownloadPDF = () => {
+    const currentUserStr = localStorage.getItem("nova_facturacion_current_user");
+    let email = "";
+    if (currentUserStr) {
+      try {
+        const user = JSON.parse(currentUserStr);
+        email = user.email || "";
+      } catch (e) {}
+    }
+    let operatingEmail = email;
+    if (operatingEmail === "marialuzgonzalez1234568@gmail.com") {
+      operatingEmail = "luisrodriguezgon22@gmail.com";
+    }
+
+    const config = getBusinessConfig(operatingEmail);
+    const blob = generateSalesAndClosuresPDF(sales, closures, config);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Ventas_Cierre-${config.name.replace(/\s+/g, "_")}-${new Date().toISOString().substring(0, 10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleShareWhatsApp = () => {
+    const currentUserStr = localStorage.getItem("nova_facturacion_current_user");
+    let email = "";
+    if (currentUserStr) {
+      try {
+        const user = JSON.parse(currentUserStr);
+        email = user.email || "";
+      } catch (e) {}
+    }
+    let operatingEmail = email;
+    if (operatingEmail === "marialuzgonzalez1234568@gmail.com") {
+      operatingEmail = "luisrodriguezgon22@gmail.com";
+    }
+    const config = getBusinessConfig(operatingEmail);
+
+    const totalSales = sales.reduce((acc, s) => acc + s.total, 0);
+    const totalProfitNum = totalNetProfit;
+    const textHeader = `*${config.name.toUpperCase()} - REPORTE DE VENTAS Y CAJA*\n`;
+    const textMeta = `_Generado: ${new Date().toLocaleDateString("es-DO")}_\n` +
+                     `===================================\n`;
+    
+    const recentLines = sales.slice(0, 15).map(s => {
+      const payingUserStr = s.client ? s.client.name.toUpperCase() : "CLIENTE GENERAL";
+      return `• Fact: *${s.invoiceNumber}* | ${payingUserStr}\n  Total: *RD$ ${s.total.toFixed(0)}* (${s.paymentMethod.toUpperCase()})`;
+    }).join("\n");
+
+    const textFooter = `\n===================================\n` +
+                       `*Arqueo total ventas:* RD$ ${totalSales.toLocaleString("es-DO")}/DOP\n` +
+                       `*Beneficio neto proyectado:* RD$ ${totalProfitNum.toLocaleString("es-DO")}/DOP\n` +
+                       `*Cierres históricos totales:* ${closures.length} días de arqueo\n\n` +
+                       `¡Control de Facturación Digital Nova!`;
+
+    const fullMsg = textHeader + textMeta + (recentLines || "• No hay transacciones reportadas hoy.") + textFooter;
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(fullMsg)}`, "_blank");
+  };
 
   // Sum calculations
   const totalSalesVolume = sales.reduce((acc, s) => acc + s.total, 0);
@@ -147,23 +211,43 @@ export default function SalesHistory({
           <p className="text-xs text-slate-400">Mide ingresos brutos, costos incurridos, ITBIS y realiza el arqueo de caja de forma ágil.</p>
         </div>
 
-        <div className="flex gap-2.5 w-full md:w-auto">
+        <div className="flex flex-wrap gap-2 w-full md:w-auto">
+          <button
+            id="btn-sales-pdf"
+            onClick={handleDownloadPDF}
+            className="flex-1 md:flex-none flex items-center justify-center gap-1 px-3 py-2 bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 text-xs font-bold rounded-lg transition cursor-pointer"
+            title="Descargar Reporte Completo en PDF"
+          >
+            <FileText className="h-4 w-4" />
+            <span>Ver PDF</span>
+          </button>
+          
+          <button
+            id="btn-sales-whatsapp"
+            onClick={handleShareWhatsApp}
+            className="flex-1 md:flex-none flex items-center justify-center gap-1 px-3 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 text-xs font-bold rounded-lg transition cursor-pointer"
+            title="Enviar Reporte por WhatsApp"
+          >
+            <Send className="h-4 w-4" />
+            <span>WhatsApp</span>
+          </button>
+
           <button
             id="btn-toggle-closure-history"
             onClick={() => setShowClosureHistory(!showClosureHistory)}
             className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-lg border border-slate-700 transition cursor-pointer"
           >
             <Calendar className="h-4 w-4 text-sky-400" />
-            {showClosureHistory ? "Ver Lista Ventas" : "Ver Cierres Realizados"}
+            {showClosureHistory ? "Ventas" : "Cierres"}
           </button>
 
           <button
             id="btn-execute-cerrar-dia"
             onClick={handleCloseDayClick}
-            className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-4.5 py-2 bg-rose-650 hover:bg-rose-550 text-white text-xs font-black rounded-lg transition shadow-lg cursor-pointer animate-pulse"
+            className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-rose-650 hover:bg-rose-550 text-white text-xs font-black rounded-lg transition shadow-lg cursor-pointer animate-pulse"
           >
             <CheckCircle className="h-4 w-4" />
-            Cerrar Día (Resetear Caja)
+            Cerrar Día (Resetear)
           </button>
         </div>
       </div>

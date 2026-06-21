@@ -1,7 +1,8 @@
 import { useState, FormEvent } from "react";
-import { Plus, Search, Table, Grid, RotateCcw, PenTool, Check, AlertTriangle, RefreshCw, Trash2 } from "lucide-react";
+import { Plus, Search, Table, Grid, RotateCcw, PenTool, Check, AlertTriangle, RefreshCw, Trash2, FileText, Send } from "lucide-react";
 import { Product } from "../types";
 import { INITIAL_CATEGORIES } from "../data";
+import { getBusinessConfig, generateInventoryCatalogPDF } from "../utils/pdfGenerator";
 
 interface InventoryProps {
   products: Product[];
@@ -30,6 +31,67 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [quickStockValue, setQuickStockValue] = useState("");
   const [deletingProductId, setDeletingProductId] = useState<string | null>(null);
+
+  const handleDownloadPDF = () => {
+    const currentUserStr = localStorage.getItem("nova_facturacion_current_user");
+    let email = "";
+    if (currentUserStr) {
+      try {
+        const user = JSON.parse(currentUserStr);
+        email = user.email || "";
+      } catch (e) {}
+    }
+    let operatingEmail = email;
+    if (operatingEmail === "marialuzgonzalez1234568@gmail.com") {
+      operatingEmail = "luisrodriguezgon22@gmail.com";
+    }
+
+    const config = getBusinessConfig(operatingEmail);
+    const blob = generateInventoryCatalogPDF(products, config);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Inventario-${config.name.replace(/\s+/g, "_")}-${new Date().toISOString().substring(0, 10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleShareWhatsApp = () => {
+    const currentUserStr = localStorage.getItem("nova_facturacion_current_user");
+    let email = "";
+    if (currentUserStr) {
+      try {
+        const user = JSON.parse(currentUserStr);
+        email = user.email || "";
+      } catch (e) {}
+    }
+    let operatingEmail = email;
+    if (operatingEmail === "marialuzgonzalez1234568@gmail.com") {
+      operatingEmail = "luisrodriguezgon22@gmail.com";
+    }
+    const config = getBusinessConfig(operatingEmail);
+
+    const textHeader = `*${config.name.toUpperCase()} - REPORTE DE INVENTARIO*\n`;
+    const textMeta = `_Emitido el: ${new Date().toLocaleDateString("es-DO")}_\n` +
+                     `_Total referencias: ${products.length} productos_\n` +
+                     `===================================\n`;
+    
+    const productLines = products.slice(0, 30).map(p => {
+      const stockText = p.stock <= (p.minStock || 5) ? `⚠️ *${p.stock}* (Bajo stock)` : `*${p.stock}* unds`;
+      return `• *${p.name.toUpperCase()}*\n  Cod: \`${p.barcode}\` | Categoría: _${p.category}_\n  Precio: *RD$ ${p.price.toFixed(0)}* | Stock: ${stockText}`;
+    }).join("\n\n");
+
+    const textFooter = `\n===================================\n` +
+                       `*Cant. total de stock:* ${products.reduce((acc, p) => acc + p.stock, 0)} unidades\n` +
+                       `*Valor total inventario (costo):* RD$ ${totalInventoryCost.toLocaleString("es-DO", { maximumFractionDigits: 0 })}/DOP\n` +
+                       `*Valor total venta estimado:* RD$ ${totalInventoryValue.toLocaleString("es-DO", { maximumFractionDigits: 0 })}/DOP\n\n` +
+                       `¡Control de Inventario Digital Nova!`;
+
+    const fullMsg = textHeader + textMeta + productLines + textFooter;
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(fullMsg)}`, "_blank");
+  };
 
   const triggerBarcodeGen = () => {
     // Generates a proper Dominican retail format EAN-13 simulator code
@@ -115,14 +177,36 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
           <p className="text-xs text-slate-500">Maneja stock, costos de compra, precios de venta, alertas y tasas dominicanas (ITBIS).</p>
         </div>
 
-        <button
-          id="btn-toggle-product-form"
-          onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition shadow-xs cursor-pointer"
-        >
-          <Plus className="h-4 w-4" />
-          {showForm ? "Cerrar Formulario" : "Ingresar Nuevo Producto"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          <button
+            id="btn-inventory-pdf"
+            onClick={handleDownloadPDF}
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-lg border border-rose-200 transition cursor-pointer"
+            title="Descargar Catálogo Completo en PDF"
+          >
+            <FileText className="h-4 w-4" />
+            <span>Ver PDF</span>
+          </button>
+          
+          <button
+            id="btn-inventory-whatsapp"
+            onClick={handleShareWhatsApp}
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-lg border border-emerald-200 transition cursor-pointer"
+            title="Enviar Inventario por WhatsApp"
+          >
+            <Send className="h-4 w-4" />
+            <span>WhatsApp</span>
+          </button>
+
+          <button
+            id="btn-toggle-product-form"
+            onClick={() => setShowForm(!showForm)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition shadow-xs cursor-pointer"
+          >
+            <Plus className="h-4 w-4" />
+            {showForm ? "Cerrar" : "Nuevo Producto"}
+          </button>
+        </div>
       </div>
 
       {/* Evaluation summary dashboard widgets */}

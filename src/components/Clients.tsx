@@ -1,6 +1,7 @@
 import { useState, FormEvent } from "react";
-import { User, Phone, DollarSign, Plus, RotateCcw, ShieldAlert, Sparkles, Check, CheckCircle2, Trash2 } from "lucide-react";
+import { User, Phone, DollarSign, Plus, RotateCcw, ShieldAlert, Sparkles, Check, CheckCircle2, Trash2, FileText, Send } from "lucide-react";
 import { Client, PaymentRecord } from "../types";
+import { getBusinessConfig, generateClientDebtsPDF } from "../utils/pdfGenerator";
 
 interface ClientsProps {
   clients: Client[];
@@ -27,6 +28,67 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
   
   // Local list of payment records for auditing
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
+
+  const handleDownloadPDF = () => {
+    const currentUserStr = localStorage.getItem("nova_facturacion_current_user");
+    let email = "";
+    if (currentUserStr) {
+      try {
+        const user = JSON.parse(currentUserStr);
+        email = user.email || "";
+      } catch (e) {}
+    }
+    let operatingEmail = email;
+    if (operatingEmail === "marialuzgonzalez1234568@gmail.com") {
+      operatingEmail = "luisrodriguezgon22@gmail.com";
+    }
+
+    const config = getBusinessConfig(operatingEmail);
+    const blob = generateClientDebtsPDF(clients, config);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Cuentas_Cobrar-${config.name.replace(/\s+/g, "_")}-${new Date().toISOString().substring(0, 10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleShareWhatsApp = () => {
+    const currentUserStr = localStorage.getItem("nova_facturacion_current_user");
+    let email = "";
+    if (currentUserStr) {
+      try {
+        const user = JSON.parse(currentUserStr);
+        email = user.email || "";
+      } catch (e) {}
+    }
+    let operatingEmail = email;
+    if (operatingEmail === "marialuzgonzalez1234568@gmail.com") {
+      operatingEmail = "luisrodriguezgon22@gmail.com";
+    }
+    const config = getBusinessConfig(operatingEmail);
+
+    const totalDebts = clients.reduce((acc, c) => acc + (c.currentDebt || 0), 0);
+    const textHeader = `*${config.name.toUpperCase()} - ESTADO DE CUENTAS POR COBRAR*\n`;
+    const textMeta = `_Al corte: ${new Date().toLocaleDateString("es-DO")}_\n` +
+                     `_Total cartera clientes: ${clients.length}_\n` +
+                     `===================================\n`;
+    
+    const debtorLines = clients
+      .filter(c => c.currentDebt > 0 && c.id !== "cli-generico")
+      .slice(0, 30)
+      .map(c => `• *${c.name.toUpperCase()}*\n  Tel: ${c.phone || "S/N"} | Deuda: *RD$ ${c.currentDebt.toLocaleString()}* | Límite: RD$ ${c.creditLimit.toLocaleString()}`)
+      .join("\n\n");
+
+    const textFooter = `\n===================================\n` +
+                       `*BALANCE TOTAL POR COBRAR:* RD$ ${totalDebts.toLocaleString("es-DO")}/DOP\n\n` +
+                       `¡Gracias por mantener su cuenta al día!`;
+
+    const fullMsg = textHeader + textMeta + (debtorLines || "• No hay clientes con balances pendientes de pago.") + textFooter;
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(fullMsg)}`, "_blank");
+  };
 
   const handleCreateClientSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -109,14 +171,36 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
           </p>
         </div>
 
-        <button
-          id="btn-toggle-client-form"
-          onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition shadow-xs cursor-pointer"
-        >
-          <Plus className="h-4 w-4" />
-          {showForm ? "Cerrar Registro" : "Registrar Nuevo Cliente"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          <button
+            id="btn-clients-pdf"
+            onClick={handleDownloadPDF}
+            className="flex items-center gap-1 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-lg border border-rose-200 transition cursor-pointer"
+            title="Descargar Cuaderno de Créditos en PDF"
+          >
+            <FileText className="h-4 w-4" />
+            <span>Ver PDF</span>
+          </button>
+          
+          <button
+            id="btn-clients-whatsapp"
+            onClick={handleShareWhatsApp}
+            className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-lg border border-emerald-200 transition cursor-pointer"
+            title="Enviar Estado de Deudores por WhatsApp"
+          >
+            <Send className="h-4 w-4" />
+            <span>WhatsApp</span>
+          </button>
+
+          <button
+            id="btn-toggle-client-form"
+            onClick={() => setShowForm(!showForm)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition shadow-xs cursor-pointer"
+          >
+            <Plus className="h-4 w-4" />
+            {showForm ? "Cerrar" : "Nuevo Cliente"}
+          </button>
+        </div>
       </div>
 
       {/* Creation form trigger slide */}
