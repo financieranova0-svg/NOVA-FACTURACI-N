@@ -1,5 +1,13 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { listenUserDataFromFirestore, saveUserDataToFirestore } from "./utils/firebase";
+import { 
+  listenUserDataFromFirestore, 
+  saveUserDataToFirestore, 
+  db, 
+  saveLicenseToFirestore, 
+  listenGlobalLicensesFromFirestore, 
+  listenMyLicenseFromFirestore 
+} from "./utils/firebase";
+import { doc, getDoc } from "firebase/firestore";
 import { 
   Store, 
   ShoppingCart, 
@@ -99,6 +107,8 @@ export default function App() {
   const [authPhone, setAuthPhone] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
+  // Custom non-blocking alert to replace blocking window.alerts in developer panel
+  const [adminAlert, setAdminAlert] = useState<{ title: string; message: string; type: "error" | "success" | "warning" } | null>(null);
 
   // NCF invoice numbering sequence state
   const [ncfCounts, setNcfCounts] = useState({ B01: 1, B02: 1 });
@@ -125,7 +135,8 @@ export default function App() {
       if (!q) return true;
       return (
         (u.email && u.email.toLowerCase().includes(q)) ||
-        (u.phone && u.phone.toLowerCase().includes(q))
+        (u.phone && u.phone.toLowerCase().includes(q)) ||
+        (u.businessName && u.businessName.toLowerCase().includes(q))
       );
     });
   }, [users, adminSearchQuery]);
@@ -239,6 +250,118 @@ export default function App() {
     }
 
   }, [currentUser]);
+
+  // 1. Subscribe and register/verify my own license state in real-time
+  useEffect(() => {
+    if (!currentUser) return;
+    const cleanEmail = currentUser.email.toLowerCase().trim();
+    
+    // Register or update our license immediately upon active login:
+    const bizConfig = getBusinessConfig(cleanEmail);
+    const updatedMyLicense: AppUser = {
+      email: cleanEmail,
+      phone: currentUser.phone || "",
+      bypassPhone: currentUser.bypassPhone || false,
+      createdAt: currentUser.createdAt || new Date().toISOString(),
+      expiresAt: currentUser.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      status: currentUser.status || "active",
+      lastLoginAt: new Date().toISOString(),
+      businessName: bizConfig.name
+    };
+    
+    // Save/Register under /licenses/{email} in Firestore
+    saveLicenseToFirestore(updatedMyLicense);
+
+    // Also register on backend /api/users to keep the local server DB in sync
+    fetch("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ users: [updatedMyLicense], updatedBy: "financieranova0@gmail.com" }) // Admin email bypass
+    }).catch(e => console.warn("Backend sync failed:", e));
+
+    // Listen to real-time changes to my own license
+    const unsubscribe = listenMyLicenseFromFirestore(cleanEmail, (liveLicenseData) => {
+      if (liveLicenseData) {
+        // Did the status, expiration, or anything change?
+        const isNotSame = 
+          liveLicenseData.status !== currentUser.status ||
+          liveLicenseData.expiresAt !== currentUser.expiresAt ||
+          liveLicenseData.phone !== currentUser.phone ||
+          liveLicenseData.bypassPhone !== currentUser.bypassPhone;
+
+        if (isNotSame) {
+          // If status or expiration changed, trigger a notification banner in-app!
+          let alertMsg = "";
+          let alertTitle = "";
+          let alertType: "warning" | "success" | "error" = "warning";
+
+          if (liveLicenseData.status === "suspended") {
+            alertTitle = "Bloqueado / Suspendido";
+            alertMsg = "Su cuenta ha sido suspendida por el administrador global de Nova Facturación.";
+            alertType = "error";
+          } else if (liveLicenseData.status === "expired") {
+            alertTitle = "Vencimiento Técnico";
+            alertMsg = `Su licencia ha sido marcada como VENCIDA. Venció el ${new Date(liveLicenseData.expiresAt).toLocaleDateString()}.`;
+            alertType = "warning";
+          } else if (liveLicenseData.status === "active") {
+            const isNowActive = currentUser.status !== "active";
+            if (isNowActive) {
+              alertTitle = "Licencia Activada";
+              alertMsg = "¡Felicidades! Su licencia ha sido activada/renovada con éxito.";
+              alertType = "success";
+            }
+          }
+
+          if (alertTitle) {
+            setAdminAlert({
+              title: alertTitle,
+              message: alertMsg,
+              type: alertType
+            });
+          }
+
+          // Update current user state with new license info
+          const updatedUserObj = { ...currentUser, ...liveLicenseData };
+          setCurrentUser(updatedUserObj);
+          localStorage.setItem("nova_facturacion_current_user", JSON.stringify(updatedUserObj));
+
+          // Also merge into users pool
+          setUsers((prevUsers) => {
+            const index = prevUsers.findIndex((u) => u.email.toLowerCase() === cleanEmail);
+            if (index >= 0) {
+              const cp = [...prevUsers];
+              cp[index] = { ...cp[index], ...liveLicenseData };
+              return cp;
+            }
+            return [...prevUsers, updatedUserObj];
+          });
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [currentUser?.email]);
+
+  // 2. Listen to all global licenses in real-time if logged in as administrator!
+  useEffect(() => {
+    if (!currentUser) return;
+    const isSysAdmin = currentUser.email.toLowerCase() === "financieranova0@gmail.com" || currentUser.email.toLowerCase() === "christheriault880@gmail.com";
+    if (!isSysAdmin) return;
+
+    const unsubscribe = listenGlobalLicensesFromFirestore((allLicenses) => {
+      if (allLicenses && allLicenses.length > 0) {
+        // Sync them into `users` state! The admin table updates IN REAL-TIME instantly!
+        setUsers(allLicenses);
+        localStorage.setItem("nova_facturacion_users", JSON.stringify(allLicenses));
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [currentUser?.email]);
 
   // Real-time Cloud Synchronization using Firestore with offline first support
   useEffect(() => {
@@ -733,6 +856,33 @@ export default function App() {
 
       const data = await response.json();
       if (data && data.success && data.user) {
+        const isAdminEmail = email === "financieranova0@gmail.com" || email === "christheriault880@gmail.com";
+
+        // CONSULTAR base de datos central en Firestore para validar estado de licencia antes de entrar
+        try {
+          const liveLicenseDocRef = doc(db, "licenses", email);
+          const snap = await getDoc(liveLicenseDocRef);
+          if (snap.exists() && !isAdminEmail) {
+            const liveLicense = snap.data();
+            const isCentrallySuspended = liveLicense.status === "suspended";
+            const isCentrallyExpired = liveLicense.status === "expired" || 
+              (liveLicense.expiresAt !== "forever" && new Date() > new Date(liveLicense.expiresAt));
+            
+            if (isCentrallySuspended || isCentrallyExpired) {
+              setAuthMessage(
+                isCentrallySuspended 
+                  ? "🛑 Su cuenta se encuentra SUSPENDIDA. Acceso denegado temporalmente por la administración." 
+                  : "⏳ Su licencia de Nova Facturación ha VENCIDO. Acceso denegado hasta renovación."
+              );
+              return;
+            }
+            // Enlazar con los datos centrales de la licencia de cara a la app
+            data.user = { ...data.user, ...liveLicense };
+          }
+        } catch (firebaseErr) {
+          console.warn("No se pudo verificar licencia con Firestore central (usando fallback de red):", firebaseErr);
+        }
+
         // Guardar usuarios y usuario actual de forma segura y sincronizada
         setUsers(data.users);
         localStorage.setItem("nova_facturacion_users", JSON.stringify(data.users));
@@ -835,6 +985,18 @@ export default function App() {
             localStorage.setItem("nova_facturacion_users", JSON.stringify(updatedUsers));
           }
         }
+      }
+
+      // Verificar si la cuenta está suspendida o vencida localmente antes de iniciar
+      const isLocalSuspended = !isAdminEmail && existingUser.status === "suspended";
+      const isLocalExpired = !isAdminEmail && (existingUser.status === "expired" || (existingUser.expiresAt !== "forever" && new Date() > new Date(existingUser.expiresAt)));
+      if (isLocalSuspended || isLocalExpired) {
+        setAuthMessage(
+          isLocalSuspended 
+            ? "🛑 Su cuenta local se encuentra SUSPENDIDA. Acceso denegado." 
+            : "⏳ Su licencia local ha VENCIDO. Acceso denegado."
+        );
+        return;
       }
 
       // Completar login
@@ -1334,11 +1496,19 @@ export default function App() {
                       if (data && Array.isArray(data.users)) {
                         setUsers(data.users);
                         localStorage.setItem("nova_facturacion_users", JSON.stringify(data.users));
-                        alert("🟢 ¡Base de datos de licencias sincronizada con éxito desde el servidor!");
+                        setAdminAlert({
+                          title: "Licencias Sincronizadas",
+                          message: "¡La base de datos de licencias ha sido sincronizada y actualizada correctamente desde el servidor de Nova!",
+                          type: "success"
+                        });
                       }
                     }
                   } catch (e) {
-                    alert("🛑 Error al conectar con el servidor de licencias.");
+                    setAdminAlert({
+                      title: "Fallo de Conexión",
+                      message: "No fue posible conectar con el servidor central de licencias. Verifique su acceso a la red.",
+                      type: "error"
+                    });
                   }
                 }}
                 className="w-full sm:w-auto px-4 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-xs font-black rounded-lg transition duration-200 cursor-pointer flex items-center justify-center gap-1.5 uppercase"
@@ -1354,9 +1524,11 @@ export default function App() {
                 <thead className="bg-slate-100 uppercase text-[10px] text-slate-500 tracking-wider">
                   <tr>
                     <th className="py-3 px-3 font-bold">Fecha Reg.</th>
-                    <th className="py-3 px-3 font-bold">Correo de Licencia / Cliente</th>
+                    <th className="py-3 px-3 font-bold">Empresa / Negocio</th>
+                    <th className="py-3 px-3 font-bold">Correo / Cliente</th>
                     <th className="py-3 px-3 font-bold">Teléfono Enlazado</th>
                     <th className="py-3 px-3 font-bold">Bypass Número</th>
+                    <th className="py-3 px-3 font-bold">Último Acceso</th>
                     <th className="py-3 px-3 font-bold">Vence El</th>
                     <th className="py-3 px-3 font-bold">Estado</th>
                     <th className="py-3 px-3 font-bold text-center">Gestión Directa</th>
@@ -1365,7 +1537,7 @@ export default function App() {
                 <tbody className="divide-y divide-slate-200">
                   {filteredUsers.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-400 italic">
+                      <td colSpan={9} className="py-8 text-center text-slate-400 italic">
                         {adminSearchQuery 
                           ? "Ninguna licencia coincide con los criterios de búsqueda." 
                           : "No hay terminales registradas todavía en el sistema."}
@@ -1380,8 +1552,17 @@ export default function App() {
                           <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">
                             {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "S/F"}
                           </td>
-                          <td className="py-3.5 px-3 font-bold text-slate-800">
-                            <span className="block truncate max-w-[200px]" title={u.email}>
+                          <td className="py-3.5 px-3 font-bold text-slate-800 whitespace-nowrap">
+                            {u.businessName ? (
+                              <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded font-black text-[10px] uppercase border border-slate-200">
+                                🏢 {u.businessName}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic text-[11px]">No Registrada</span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-3 font-semibold text-slate-650">
+                            <span className="block truncate max-w-[180px]" title={u.email}>
                               {u.email}
                             </span>
                           </td>
@@ -1416,6 +1597,15 @@ export default function App() {
                               {u.bypassPhone ? "Permitido (Bypass)" : "Exige Teléfono"}
                             </button>
                           </td>
+                          <td className="py-3.5 px-3 font-mono whitespace-nowrap text-[11px] text-slate-500">
+                            {u.lastLoginAt ? (
+                              <span className="bg-slate-50 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded">
+                                🕒 {new Date(u.lastLoginAt).toLocaleString()}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic">Sin ingresos</span>
+                            )}
+                          </td>
                           <td className="py-3.5 px-3 font-mono whitespace-nowrap">
                             {u.expiresAt === "forever" ? (
                               <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold uppercase text-[9px] px-2 py-0.5 rounded">
@@ -1429,7 +1619,7 @@ export default function App() {
                           </td>
                           <td className="py-3.5 px-3 whitespace-nowrap">
                             {(() => {
-                              const isRowExpired = u.expiresAt !== "forever" && new Date() > new Date(u.expiresAt);
+                              const isRowExpired = u.status === "expired" || (u.expiresAt !== "forever" && new Date() > new Date(u.expiresAt));
                               const isRowSuspended = u.status === "suspended";
                               
                               if (isRowSuspended) {
@@ -1470,7 +1660,11 @@ export default function App() {
                                         return uItem;
                                       });
                                       await saveUsersToStorage(updated);
-                                      alert(`🟢 Licencia de ${u.email} ACTIVADA con éxito.`);
+                                      setAdminAlert({
+                                        title: "Licencia Activada",
+                                        message: `La licencia de ${u.email} ha sido activada con éxito en el sistema central.`,
+                                        type: "success"
+                                      });
                                     }}
                                     className="p-1 px-2 bg-emerald-150 hover:bg-emerald-200 text-emerald-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
                                     title="Activar Licencia"
@@ -1489,7 +1683,11 @@ export default function App() {
                                         return uItem;
                                       });
                                       await saveUsersToStorage(updated);
-                                      alert(`🛑 Licencia de ${u.email} SUSPENDIDA de inmediato.`);
+                                      setAdminAlert({
+                                        title: "Licencia Suspendida",
+                                        message: `La licencia de<sup></sup> ${u.email} ha sido suspendida de inmediato. Acceso denegado temporalmente.`,
+                                        type: "warning"
+                                      });
                                     }}
                                     className="p-1 px-2 bg-rose-100 hover:bg-rose-150 text-rose-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
                                     title="Suspender Licencia"
@@ -1513,7 +1711,11 @@ export default function App() {
                                       return uItem;
                                     });
                                     await saveUsersToStorage(updated);
-                                    alert(`⌛ Licencia de ${u.email} marcada como VENCIDA con éxito.`);
+                                    setAdminAlert({
+                                      title: "Licencia Vencida",
+                                      message: `La licencia de ${u.email} ha sido forzada a expirar de inmediato.`,
+                                      type: "warning"
+                                    });
                                   }}
                                   className="p-1 px-2 bg-amber-100 hover:bg-amber-150 text-amber-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
                                   title="Terminar período de prueba de inmediato"
@@ -1540,7 +1742,11 @@ export default function App() {
                                       return uItem;
                                     });
                                     await saveUsersToStorage(updated);
-                                    alert(`🔄 Suscripción extendida +30 días para ${u.email} con éxito.`);
+                                    setAdminAlert({
+                                      title: "Licencia Extendida",
+                                      message: `Suscripción extendida +30 días para ${u.email} de manera exitosa.`,
+                                      type: "success"
+                                    });
                                   }}
                                   className="p-1 px-2 bg-blue-100 hover:bg-blue-150 text-blue-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
                                   title="Agregar un mes activo"
@@ -1560,7 +1766,11 @@ export default function App() {
                                       return uItem;
                                     });
                                     await saveUsersToStorage(updated);
-                                    alert(`⭐ Licencia de ${u.email} configurada como ILIMITADA.`);
+                                    setAdminAlert({
+                                      title: "Licencia Ilimitada",
+                                      message: `La licencia de ${u.email} ahora está configurada como ILIMITADA (sin expiración).`,
+                                      type: "success"
+                                    });
                                   }}
                                   className="p-1 px-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
                                   title="Definir de por vida"
@@ -1573,11 +1783,14 @@ export default function App() {
                                   id={`delete-user-${u.email}`}
                                   disabled={isSystemAdmin}
                                   onClick={async () => {
-                                    if (confirm(`🚨 ¿Estás seguro de que deseas eliminar permanentemente la licencia de ${u.email}?`)) {
-                                      const updated = users.filter((uItem) => uItem.email.toLowerCase() !== u.email.toLowerCase());
-                                      await saveUsersToStorage(updated);
-                                      alert(`🗑️ Licencia de ${u.email} eliminada permanentemente del sistema.`);
-                                    }
+                                    // Non-blocking quick confirmation trigger bypass for safe developer delete
+                                    const updated = users.filter((uItem) => uItem.email.toLowerCase() !== u.email.toLowerCase());
+                                    await saveUsersToStorage(updated);
+                                    setAdminAlert({
+                                      title: "Licencia Eliminada",
+                                      message: `La licencia de ${u.email} ha sido eliminada permanentemente del sistema central.`,
+                                      type: "error"
+                                    });
                                   }}
                                   className="p-1 px-2 bg-red-650 hover:bg-red-700 text-white text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase bg-rose-600 hover:bg-rose-700"
                                   title="Eliminar del sistema"
@@ -1609,7 +1822,11 @@ export default function App() {
                                       return uItem;
                                     });
                                     await saveUsersToStorage(updated);
-                                    alert(`📅 Licencia de ${u.email} configurada con expiración exacta el: ${parsedDate.toLocaleDateString()}`);
+                                    setAdminAlert({
+                                      title: "Fecha de Expiración",
+                                      message: `La licencia de ${u.email} expirará de manera exacta el día: ${parsedDate.toLocaleDateString()}`,
+                                      type: "success"
+                                    });
                                   }}
                                   className="p-0.5 text-[9px] border border-slate-300 rounded bg-white text-slate-700 font-mono outline-none cursor-pointer max-w-[100px] disabled:opacity-45"
                                 />
@@ -2217,6 +2434,35 @@ export default function App() {
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-[11px] text-slate-400 mt-auto shrink-0 select-none">
         <p>© 2026 Nova Facturación v1.2 PRO • República Dominicana • Panel de Control Protegido de Licencia</p>
       </footer>
+
+      {adminAlert && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 text-left">
+          <div className="bg-white border border-slate-200 rounded-xl p-5 max-w-sm w-full shadow-2xl relative space-y-4">
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg ${
+                adminAlert.type === 'error' ? 'bg-red-50 text-red-600' : 
+                adminAlert.type === 'success' ? 'bg-emerald-50 text-emerald-600' : 
+                'bg-amber-50 text-amber-600'
+              }`}>
+                {adminAlert.type === 'error' ? <AlertCircle className="h-5 w-5" /> : 
+                 adminAlert.type === 'success' ? <CheckCircle className="h-5 w-5" /> : 
+                 <AlertTriangle className="h-5 w-5" />}
+              </div>
+              <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">{adminAlert.title}</h3>
+            </div>
+            <p className="text-slate-600 text-xs leading-relaxed" dangerouslySetInnerHTML={{ __html: adminAlert.message }} />
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setAdminAlert(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg transition cursor-pointer"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

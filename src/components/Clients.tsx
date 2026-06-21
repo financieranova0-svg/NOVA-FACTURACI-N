@@ -29,6 +29,9 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
   // Local list of payment records for auditing
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
 
+  // Custom non-blocking alert overlay to prevent system freezing in iframes
+  const [customAlert, setCustomAlert] = useState<{ title: string; message: string; type: "error" | "success" | "warning" } | null>(null);
+
   const handleDownloadPDF = () => {
     const currentUserStr = localStorage.getItem("nova_facturacion_current_user");
     let email = "";
@@ -98,7 +101,11 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
     const initialDebtVal = parseFloat(initialDebt) || 0;
 
     if (initialDebtVal > limitVal) {
-      alert(`Error: El monto fiado inicial (RD$${initialDebtVal}) no puede ser mayor que el límite de crédito (RD$${limitVal}).`);
+      setCustomAlert({
+        title: "Límite súperado",
+        message: `El monto fiado inicial (RD$${initialDebtVal.toLocaleString()}) no puede ser mayor que el límite de crédito configurado (RD$${limitVal.toLocaleString()}).`,
+        type: "error"
+      });
       return;
     }
 
@@ -131,12 +138,20 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
 
     const amount = parseFloat(paymentAmount);
     if (isNaN(amount) || amount <= 0) {
-      alert("Error: Introduce un monto de abono válido mayor que 0.");
+      setCustomAlert({
+        title: "Monto inválido",
+        message: "Por favor introduce un monto de abono válido mayor que RD$0.",
+        type: "error"
+      });
       return;
     }
 
     if (amount > client.currentDebt) {
-      alert(`Error: El abono (RD$${amount}) no puede ser mayor que la deuda del cliente (RD$${client.currentDebt}).`);
+      setCustomAlert({
+        title: "Abono excede saldo",
+        message: `El abono ingresado (RD$${amount.toLocaleString()}) no puede ser mayor que la deuda actual del cliente (RD$${client.currentDebt.toLocaleString()}).`,
+        type: "error"
+      });
       return;
     }
 
@@ -161,7 +176,8 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
   const activeCreditClients = clients.filter((c) => c.id !== "cli-generico");
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <>
+      <div className="space-y-4 animate-fade-in">
       {/* Header Banner */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
         <div>
@@ -344,7 +360,11 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
                           id={`btn-delete-client-${client.id}`}
                           onClick={() => {
                             if (client.currentDebt > 0) {
-                              alert("Oops: Este cliente posee balance deudor activo. Debe saldar o abonar a RD$0.00 antes de proceder a la eliminación física.");
+                              setCustomAlert({
+                                title: "Deuda Activa",
+                                message: `Oops: Este cliente posee un balance deudor activo de RD$${client.currentDebt.toLocaleString()}. Debe saldar o abonar a RD$0.00 antes de poder eliminarlo.`,
+                                type: "warning"
+                              });
                             } else {
                               onDeleteClient?.(client.id);
                             }
@@ -519,5 +539,35 @@ export default function Clients({ clients, onAddClient, onUpdateClientDebt, onDe
         </div>
       )}
     </div>
+
+    {customAlert && (
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4">
+        <div className="bg-white border border-slate-200 rounded-xl p-5 max-w-sm w-full shadow-2xl relative space-y-4">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-lg ${
+              customAlert.type === 'error' ? 'bg-red-50 text-red-600' : 
+              customAlert.type === 'success' ? 'bg-emerald-50 text-emerald-600' : 
+              'bg-amber-50 text-amber-600'
+            }`}>
+              {customAlert.type === 'error' ? <ShieldAlert className="h-5 w-5" /> : 
+               customAlert.type === 'success' ? <CheckCircle2 className="h-5 w-5" /> : 
+               <ShieldAlert className="h-5 w-5" />}
+            </div>
+            <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">{customAlert.title}</h3>
+          </div>
+          <p className="text-slate-600 text-xs leading-relaxed">{customAlert.message}</p>
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => setCustomAlert(null)}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg transition cursor-pointer"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

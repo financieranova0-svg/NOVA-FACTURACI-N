@@ -20,7 +20,8 @@ import {
   HelpCircle,
   Clock,
   Briefcase,
-  Camera
+  Camera,
+  ShieldAlert
 } from "lucide-react";
 import { Client, Product, AppUser, CustomReceipt } from "../types";
 import { getBusinessConfig, BusinessConfig, generateReceiptsListPDF } from "../utils/pdfGenerator";
@@ -46,6 +47,9 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
   
   const [searchQuery, setSearchQuery] = useState("");
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  
+  // Custom non-blocking alert to replace system freezing window.alerts
+  const [customAlert, setCustomAlert] = useState<{ title: string; message: string; type: "error" | "success" | "warning" } | null>(null);
   
   // Active receipt editor type
   const [receiptType, setReceiptType] = useState<"cuota" | "completo" | "inicio">("cuota");
@@ -279,7 +283,11 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
   const handleGenerateReceipt = (e: FormEvent) => {
     e.preventDefault();
     if (!clientName.trim()) {
-      alert("Por favor ingresa un nombre de cliente.");
+      setCustomAlert({
+        title: "Ingresar Cliente",
+        message: "Por favor ingresa un nombre de cliente para el recibo antes de procesarlo.",
+        type: "error"
+      });
       return;
     }
 
@@ -824,7 +832,8 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <>
+      <div className="space-y-6 animate-fade-in">
       
       {/* SUCCESS FLOATING ALERT */}
       {successMsg && (
@@ -1611,7 +1620,11 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
                 type="button"
                 onClick={() => {
                   if (!clientName.trim()) {
-                    alert("Favor ingresar datos del cliente antes de descargar");
+                    setCustomAlert({
+                      title: "Falta Cliente",
+                      message: "Por favor introduce el nombre del cliente en el formulario antes de exportar Carta PDF.",
+                      type: "warning"
+                    });
                     return;
                   }
                   const recTemp: CustomReceipt = {
@@ -1658,7 +1671,11 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
                 type="button"
                 onClick={() => {
                   if (!clientName.trim()) {
-                    alert("Favor ingresar datos del cliente antes de descargar");
+                    setCustomAlert({
+                      title: "Falta Cliente",
+                      message: "Por favor introduce el nombre del cliente en el formulario antes de exportar Térmico PDF.",
+                      type: "warning"
+                    });
                     return;
                   }
                   const recTemp: CustomReceipt = {
@@ -1705,7 +1722,11 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
                 type="button"
                 onClick={() => {
                   if (!clientName.trim()) {
-                    alert("Favor ingresar datos del cliente antes de compartir");
+                    setCustomAlert({
+                      title: "Falta Cliente",
+                      message: "Por favor introduce el nombre del cliente en el formulario antes de compartir por WhatsApp.",
+                      type: "warning"
+                    });
                     return;
                   }
                   const recTemp: CustomReceipt = {
@@ -1898,5 +1919,35 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
       </div>
 
     </div>
+
+    {customAlert && (
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in animate-duration-150">
+        <div className="bg-white border border-slate-200 rounded-xl p-5 max-w-sm w-full shadow-2xl relative space-y-4 text-left">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-lg ${
+              customAlert.type === 'error' ? 'bg-red-50 text-red-600' : 
+              customAlert.type === 'success' ? 'bg-emerald-50 text-emerald-600' : 
+              'bg-amber-50 text-amber-600'
+            }`}>
+              {customAlert.type === 'error' ? <ShieldAlert className="h-5 w-5" /> : 
+               customAlert.type === 'success' ? <CheckCircle className="h-5 w-5" /> : 
+               <ShieldAlert className="h-5 w-5" />}
+            </div>
+            <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">{customAlert.title}</h3>
+          </div>
+          <p className="text-slate-600 text-xs leading-relaxed">{customAlert.message}</p>
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => setCustomAlert(null)}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg transition cursor-pointer"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

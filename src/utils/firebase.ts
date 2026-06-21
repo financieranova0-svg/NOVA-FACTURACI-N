@@ -7,6 +7,7 @@ import {
   setDoc,
   getDoc,
   onSnapshot,
+  collection,
   Firestore
 } from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -15,7 +16,7 @@ import firebaseConfig from "../../firebase-applet-config.json";
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
 // Initialize Firestore with local persistence enabled (works perfectly offline!)
-const db: Firestore = initializeFirestore(app, {
+export const db: Firestore = initializeFirestore(app, {
   localCache: persistentLocalCache({
     tabManager: persistentMultipleTabManager()
   })
@@ -107,4 +108,67 @@ export async function getUserDataFromFirestoreOnce(email: string) {
     console.error("Error fetching single document from Firestore:", err);
   }
   return null;
+}
+
+/**
+ * Saves or updates a license status directly in Firestore 'licenses' collection
+ */
+export async function saveLicenseToFirestore(license: any) {
+  if (!license || !license.email) return;
+  const cleanEmail = license.email.toLowerCase().trim();
+  const licenseDocRef = doc(db, "licenses", cleanEmail);
+  try {
+    await setDoc(licenseDocRef, {
+      ...license,
+      email: cleanEmail,
+      lastUpdated: new Date().toISOString()
+    }, { merge: true });
+  } catch (error) {
+    console.error("Error saving license to Firestore:", error);
+  }
+}
+
+/**
+ * Listens to all global licenses in real-time
+ */
+export function listenGlobalLicensesFromFirestore(onUpdate: (data: any[]) => void) {
+  const colRef = collection(db, "licenses");
+  const unsubscribe = onSnapshot(
+    colRef,
+    (snapshot: any) => {
+      const list: any[] = [];
+      snapshot.forEach((docSnap: any) => {
+        list.push({ ...docSnap.data() });
+      });
+      onUpdate(list);
+    },
+    (error) => {
+      console.error("Firestore listenGlobalLicenses error:", error);
+    }
+  );
+  return unsubscribe;
+}
+
+/**
+ * Listens to a single user's license in real-time.
+ * Perfect for reactive notifications and real-time suspension/blocking!
+ */
+export function listenMyLicenseFromFirestore(email: string, onUpdate: (data: any) => void) {
+  if (!email) return () => {};
+  const cleanEmail = email.toLowerCase().trim();
+  const licenseDocRef = doc(db, "licenses", cleanEmail);
+  const unsubscribe = onSnapshot(
+    licenseDocRef,
+    (snapshot: any) => {
+      if (snapshot.exists()) {
+        onUpdate(snapshot.data());
+      } else {
+        onUpdate(null);
+      }
+    },
+    (error) => {
+      console.error("Firestore listenMyLicense error:", error);
+    }
+  );
+  return unsubscribe;
 }

@@ -68,7 +68,9 @@ export interface AppUser {
   bypassPhone: boolean;
   createdAt: string;
   expiresAt: string; // ISO date string or "forever"
-  status: "active" | "suspended";
+  status: "active" | "suspended" | "expired";
+  lastLoginAt?: string;
+  businessName?: string;
 }
 
 export interface CustomReceipt {

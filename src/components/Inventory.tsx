@@ -1,5 +1,5 @@
 import { useState, FormEvent } from "react";
-import { Plus, Search, Table, Grid, RotateCcw, PenTool, Check, AlertTriangle, RefreshCw, Trash2, FileText, Send } from "lucide-react";
+import { Plus, Search, Table, Grid, RotateCcw, PenTool, Check, AlertTriangle, RefreshCw, Trash2, FileText, Send, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { Product } from "../types";
 import { INITIAL_CATEGORIES } from "../data";
 import { getBusinessConfig, generateInventoryCatalogPDF } from "../utils/pdfGenerator";
@@ -31,6 +31,9 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [quickStockValue, setQuickStockValue] = useState("");
   const [deletingProductId, setDeletingProductId] = useState<string | null>(null);
+
+  // Custom alert to replace blocking window.alert calls
+  const [customAlert, setCustomAlert] = useState<{ title: string; message: string; type: "error" | "success" | "warning" } | null>(null);
 
   const handleDownloadPDF = () => {
     const currentUserStr = localStorage.getItem("nova_facturacion_current_user");
@@ -105,7 +108,11 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
 
     // Check if barcode already exists
     if (products.some((p) => p.barcode === barcode.trim())) {
-      alert("Error: Este código de barras ya está registrado en otro producto.");
+      setCustomAlert({
+        title: "Código duplicado",
+        message: `El código de barras "${barcode.trim()}" ya está registrado en otro producto de su catálogo.`,
+        type: "error"
+      });
       return;
     }
 
@@ -169,7 +176,8 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
   const estProfit = totalInventoryValue - totalInventoryCost;
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <>
+      <div className="space-y-4 animate-fade-in">
       {/* Top Banner stats and actions */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
         <div>
@@ -560,5 +568,35 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
         </div>
       </div>
     </div>
+
+    {customAlert && (
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4">
+        <div className="bg-white border border-slate-200 rounded-xl p-5 max-w-sm w-full shadow-2xl relative space-y-4">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-lg ${
+              customAlert.type === 'error' ? 'bg-red-50 text-red-600' : 
+              customAlert.type === 'success' ? 'bg-emerald-50 text-emerald-600' : 
+              'bg-amber-50 text-amber-600'
+            }`}>
+              {customAlert.type === 'error' ? <ShieldAlert className="h-5 w-5" /> : 
+               customAlert.type === 'success' ? <CheckCircle2 className="h-5 w-5" /> : 
+               <ShieldAlert className="h-5 w-5" />}
+            </div>
+            <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">{customAlert.title}</h3>
+          </div>
+          <p className="text-slate-600 text-xs leading-relaxed">{customAlert.message}</p>
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => setCustomAlert(null)}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-lg transition cursor-pointer"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
