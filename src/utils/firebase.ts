@@ -111,6 +111,24 @@ export async function getUserDataFromFirestoreOnce(email: string) {
 }
 
 /**
+ * Does a one-time get of license from Firestore.
+ */
+export async function getLicenseFromFirestoreOnce(email: string) {
+  if (!email) return null;
+  const cleanEmail = email.toLowerCase().trim();
+  const docRef = doc(db, "licenses", cleanEmail);
+  try {
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data();
+    }
+  } catch (err) {
+    console.error("Error fetching single license from Firestore:", err);
+  }
+  return null;
+}
+
+/**
  * Saves or updates a license status directly in Firestore 'licenses' collection
  */
 export async function saveLicenseToFirestore(license: any) {

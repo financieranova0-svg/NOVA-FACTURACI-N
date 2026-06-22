@@ -5,7 +5,8 @@ import {
   db, 
   saveLicenseToFirestore, 
   listenGlobalLicensesFromFirestore, 
-  listenMyLicenseFromFirestore 
+  listenMyLicenseFromFirestore,
+  getLicenseFromFirestoreOnce
 } from "./utils/firebase";
 import { doc, getDoc } from "firebase/firestore";
 import { 
@@ -206,14 +207,14 @@ export default function App() {
                     }
                   }
                 } catch (se) {
-                  console.error("Auto-registro curativo de sesión falló:", se);
+                  console.warn("Auto-registro curativo de sesión falló:", se);
                 }
               }
             }
           }
         }
       } catch (err) {
-        console.error("Error synchronizing users list with server:", err);
+        console.warn("Error synchronizing users list with server:", err);
       }
     };
 
@@ -255,29 +256,45 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) return;
     const cleanEmail = currentUser.email.toLowerCase().trim();
-    
-    // Register or update our license immediately upon active login:
     const bizConfig = getBusinessConfig(cleanEmail);
-    const updatedMyLicense: AppUser = {
-      email: cleanEmail,
-      phone: currentUser.phone || "",
-      bypassPhone: currentUser.bypassPhone || false,
-      createdAt: currentUser.createdAt || new Date().toISOString(),
-      expiresAt: currentUser.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      status: currentUser.status || "active",
-      lastLoginAt: new Date().toISOString(),
-      businessName: bizConfig.name
-    };
     
-    // Save/Register under /licenses/{email} in Firestore
-    saveLicenseToFirestore(updatedMyLicense);
+    const initLicenseSafely = async () => {
+      let existingRemote: any = null;
+      try {
+        existingRemote = await getLicenseFromFirestoreOnce(cleanEmail);
+      } catch (e) {
+        console.warn("Error looking up existing remote license on start:", e);
+      }
 
-    // Also register on backend /api/users to keep the local server DB in sync
-    fetch("/api/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ users: [updatedMyLicense], updatedBy: "financieranova0@gmail.com" }) // Admin email bypass
-    }).catch(e => console.warn("Backend sync failed:", e));
+      const userStatus = existingRemote?.status || currentUser.status || "active";
+      const userExpiresAt = existingRemote?.expiresAt || currentUser.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const userPhone = existingRemote?.phone || currentUser.phone || "";
+      const userBypassPhone = existingRemote?.bypassPhone !== undefined ? existingRemote.bypassPhone : (currentUser.bypassPhone || false);
+      const userCreatedAt = existingRemote?.createdAt || currentUser.createdAt || new Date().toISOString();
+
+      const updatedMyLicense: AppUser = {
+        email: cleanEmail,
+        phone: userPhone,
+        bypassPhone: userBypassPhone,
+        createdAt: userCreatedAt,
+        expiresAt: userExpiresAt,
+        status: userStatus,
+        lastLoginAt: new Date().toISOString(),
+        businessName: bizConfig.name
+      };
+      
+      // Save/Register under /licenses/{email} in Firestore safely
+      await saveLicenseToFirestore(updatedMyLicense);
+
+      // Also register on backend /api/users to keep the local server DB in sync
+      fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ users: [updatedMyLicense], updatedBy: "financieranova0@gmail.com" }) // Admin email bypass
+      }).catch(e => console.warn("Backend sync failed:", e));
+    };
+
+    initLicenseSafely();
 
     // Listen to real-time changes to my own license
     const unsubscribe = listenMyLicenseFromFirestore(cleanEmail, (liveLicenseData) => {
@@ -1546,6 +1563,9 @@ export default function App() {
                   ) : (
                     filteredUsers.map((u) => {
                       const isSystemAdmin = u.email === "financieranova0@gmail.com" || u.email === "christheriault880@gmail.com";
+                      const isRowExpired = u.status === "expired" || (u.expiresAt !== "forever" && new Date() > new Date(u.expiresAt));
+                      const isRowSuspended = u.status === "suspended";
+                      const needsActivation = isRowSuspended || isRowExpired;
                       
                       return (
                         <tr id={`user-admin-row-${u.email}`} key={u.email} className="hover:bg-slate-50 transition duration-150">
@@ -1618,58 +1638,54 @@ export default function App() {
                             )}
                           </td>
                           <td className="py-3.5 px-3 whitespace-nowrap">
-                            {(() => {
-                              const isRowExpired = u.status === "expired" || (u.expiresAt !== "forever" && new Date() > new Date(u.expiresAt));
-                              const isRowSuspended = u.status === "suspended";
-                              
-                              if (isRowSuspended) {
-                                return (
-                                  <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-rose-100 text-rose-800 border border-rose-200 uppercase">
-                                    🛑 Suspendido
-                                  </span>
-                                );
-                              } else if (isRowExpired) {
-                                return (
-                                  <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-200 uppercase">
-                                    ⌛ Vencido
-                                  </span>
-                                );
-                              } else {
-                                return (
-                                  <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 uppercase">
-                                    🟢 Activo
-                                  </span>
-                                );
-                              }
-                            })()}
+                            {isRowSuspended ? (
+                              <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-rose-100 text-rose-800 border border-rose-200 uppercase">
+                                🛑 Suspendido
+                              </span>
+                            ) : isRowExpired ? (
+                              <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-100 text-amber-800 border border-amber-200 uppercase">
+                                ⌛ Vencido
+                              </span>
+                            ) : (
+                              <span className="inline-block px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 uppercase">
+                                🟢 Activo
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-3 text-center">
                             <div className="flex flex-col gap-2 items-center justify-center">
                               {/* Botones de acción rápida */}
                               <div className="flex items-center gap-1.5 flex-wrap justify-center">
                                 {/* Activar o Suspender */}
-                                {u.status === "suspended" ? (
+                                {needsActivation ? (
                                   <button
                                     id={`activate-user-${u.email}`}
                                     disabled={isSystemAdmin}
                                     onClick={async () => {
                                       const updated = users.map((uItem) => {
                                         if (uItem.email.toLowerCase() === u.email.toLowerCase()) {
-                                          return { ...uItem, status: "active" as const };
+                                          const isExpiredNow = uItem.status === "expired" || (uItem.expiresAt !== "forever" && new Date() > new Date(uItem.expiresAt));
+                                          // Automatically extend subscription by 30 days if activating an expired license
+                                          const baseDate = isExpiredNow ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : uItem.expiresAt;
+                                          return { 
+                                            ...uItem, 
+                                            status: "active" as const,
+                                            expiresAt: baseDate
+                                          };
                                         }
                                         return uItem;
                                       });
                                       await saveUsersToStorage(updated);
                                       setAdminAlert({
-                                        title: "Licencia Activada",
-                                        message: `La licencia de ${u.email} ha sido activada con éxito en el sistema central.`,
+                                        title: "Licencia Activada con Éxito",
+                                        message: `La licencia de **${u.email}** ha sido activada y puesta en servicio. Los bloqueos han sido levantados de forma permanente.`,
                                         type: "success"
                                       });
                                     }}
-                                    className="p-1 px-2 bg-emerald-150 hover:bg-emerald-200 text-emerald-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
+                                    className="p-1 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold rounded shadow transition cursor-pointer disabled:opacity-30 uppercase"
                                     title="Activar Licencia"
                                   >
-                                    🟢 Activar
+                                    🟢 Activar Cuenta
                                   </button>
                                 ) : (
                                   <button
@@ -1685,11 +1701,11 @@ export default function App() {
                                       await saveUsersToStorage(updated);
                                       setAdminAlert({
                                         title: "Licencia Suspendida",
-                                        message: `La licencia de<sup></sup> ${u.email} ha sido suspendida de inmediato. Acceso denegado temporalmente.`,
+                                        message: `La licencia de ${u.email} ha sido suspendida de inmediato. Acceso denegado temporalmente.`,
                                         type: "warning"
                                       });
                                     }}
-                                    className="p-1 px-2 bg-rose-100 hover:bg-rose-150 text-rose-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
+                                    className="p-1 px-2.5 bg-rose-100 hover:bg-rose-150 text-rose-800 text-[10px] font-bold rounded transition cursor-pointer disabled:opacity-30 uppercase"
                                     title="Suspender Licencia"
                                   >
                                     🛑 Suspender
@@ -2111,22 +2127,26 @@ export default function App() {
                         <th className="py-2 px-3 font-bold">Descripción Producto</th>
                         <th className="py-2 px-3 font-bold text-center">Cant.</th>
                         <th className="py-2 px-3 font-bold text-right">Precio Unitario</th>
-                        <th className="py-2 px-3 font-bold text-right">ITBIS (18%)</th>
+                        <th className="py-2 px-3 font-bold text-right">ITBIS Liquidado</th>
                         <th className="py-2 px-3 font-bold text-right">Monto Total</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-150">
                       {reprintSale.items.map((item) => {
-                        const basePrice = item.product.price / 1.18;
-                        const lineItbis = item.product.price - basePrice;
+                        const basePrice = item.product.price;
+                        const itbisRate = item.product.itbisRate || 0;
+                        const lineItbis = basePrice * (itbisRate / 100);
+                        const itemSubtotal = basePrice * item.quantity;
+                        const itemItbisTotal = lineItbis * item.quantity;
+                        const itemTotal = itemSubtotal + itemItbisTotal;
                         return (
                           <tr key={item.product.id}>
                             <td className="py-2 px-3 font-mono text-[10px] text-slate-500">{item.product.barcode || "N/A"}</td>
                             <td className="py-2 px-3 font-medium text-slate-900">{item.product.name}</td>
                             <td className="py-2 px-3 text-center font-bold">{item.quantity}</td>
-                            <td className="py-2 px-3 text-right font-mono">RD${basePrice.toFixed(2)}</td>
-                            <td className="py-2 px-3 text-right font-mono">RD${(lineItbis * item.quantity).toFixed(2)}</td>
-                            <td className="py-2 px-3 text-right font-mono font-bold">RD${(item.product.price * item.quantity).toFixed(0)}</td>
+                            <td className="py-2 px-3 text-right font-mono font-bold">RD${basePrice.toFixed(2)}</td>
+                            <td className="py-2 px-3 text-right font-mono">RD${itemItbisTotal.toFixed(2)}</td>
+                            <td className="py-2 px-3 text-right font-mono font-extrabold text-blue-900">RD${itemTotal.toFixed(2)}</td>
                           </tr>
                         );
                       })}
@@ -2170,9 +2190,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="text-[9px] text-center text-slate-400 leading-normal bg-slate-50 p-1.5 rounded">
-                    “Este documento constituye una copia con certificación digital simulada de la Factura de Crédito Fiscal autorizada por la DGII. Conforme al Art. 5 de la Ley 126-02 sobre Comercio Electrónico.”
-                  </div>
+                  {/* Disclaimer removed as requested */}
                 </div>
               )}
             </div>
@@ -2209,8 +2227,17 @@ export default function App() {
                                           `*TOTAL GENERAL CONTADO:* RD$ ${reprintSale.total.toFixed(0)}\n\n` +
                                           `※ Factura oficial en formato PDF generada con éxito y descargada en sus documentos. ¡Agradecemos su compra!`;
                       
+                      if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(messageText).catch(() => {});
+                      }
+
                       const targetUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(messageText)}`;
                       window.open(targetUrl, "_blank");
+                      setAdminAlert({
+                        title: "📥 Factura Descargada y Lista",
+                        message: "La factura PDF se ha descargado y se ha abierto WhatsApp. Para enviarla al chat de inmediato, simplemente **arrastra el archivo de descarga superior directamente sobre WhatsApp**, o si lo prefieres presiona **Ctrl+V** para pegar el desglose de texto.",
+                        type: "success"
+                      });
                     };
 
                     if (navigator.canShare && navigator.canShare({ files: [file] })) {

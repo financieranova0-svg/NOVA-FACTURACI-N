@@ -348,15 +348,8 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
       currentY += 4;
     }
 
-    // Terms note
+    // Terms note removed as requested
     currentY += 4;
-    doc.setFillColor(248, 250, 252);
-    doc.roundedRect(15, currentY, 180, 12, 1, 1, "F");
-    doc.setFont("helvetica", "oblique");
-    doc.setFontSize(7);
-    doc.setTextColor(100, 116, 139);
-    doc.text("Este documento constituye una representacion digital simulada de la Factura de Credito Fiscal certificada conforme a las", 18, currentY + 5);
-    doc.text("normas del Comprobante Fiscal Dominicano dictadas por la DGII. Valido exclusivamente para propositos financieros administrativos.", 18, currentY + 9);
 
     // Signatures
     currentY += 24;

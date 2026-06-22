@@ -299,7 +299,7 @@ export default function POS({
         setPaymentMethod("Efectivo");
       }
     }
-  }, [selectedClient]);
+  }, [selectedClient.id]);
 
   // Handle final invoice submission
   const handleCheckoutSubmit = (shouldPrint = true) => {
@@ -458,8 +458,14 @@ export default function POS({
                         `*TOTAL GENERAL CONTADO:* RD$ ${printedInvoice.total.toFixed(0)}\n\n` +
                         `※ Factura oficial en formato PDF generada con éxito y guardada en sus documentos. ¡Agradecemos su compra!`;
     
+    // Copy text to clipboard so they can also press Ctrl+V to paste the entire clean invoice copy text instantly
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(messageText).catch(() => {});
+    }
+
     const targetUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(messageText)}`;
     window.open(targetUrl, "_blank");
+    triggerAlert("success", "📥 Factura PDF descargada. Para enviarla de inmediato: ¡Arrastra el archivo de descarga superior directamente al chat de WhatsApp! O usa Ctrl+V.");
   };
 
   return (

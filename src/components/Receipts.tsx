@@ -446,10 +446,15 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
+    // Copy text to clipboard so they can also press Ctrl+V to paste the entire clean receipt copy text instantly
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+
     // Open WhatsApp
     const targetUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
     window.open(targetUrl, "_blank");
-    showBannerMessage("📥 ¡Recibo PDF descargado automáticamente! Se abrió WhatsApp. Ahora puedes arrastrarlo o adjuntarlo directamente.");
+    showBannerMessage("📥 ¡Recibo PDF descargado! Para enviarlo al chat de inmediato: ¡arrastre el archivo de descarga directamente sobre WhatsApp! O presione Ctrl+V.");
   };
 
   // jsPDF Exporter
