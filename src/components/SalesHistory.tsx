@@ -18,12 +18,14 @@ import {
   Sparkles,
   Send
 } from "lucide-react";
-import { Sale, Client, DailyClosure } from "../types";
+import { Sale, Client, DailyClosure, Product, CustomReceipt } from "../types";
 import { getBusinessConfig, generateSalesAndClosuresPDF } from "../utils/pdfGenerator";
 
 interface SalesHistoryProps {
   sales: Sale[];
   clients: Client[];
+  products: Product[];
+  receiptsList: CustomReceipt[];
   onCancelSale: (saleId: string) => void;
   onReprintInvoice: (sale: Sale, preferredFormat?: "thermal" | "letter") => void;
   onCloseDay: (closureSummary: { totalSales: number; totalProfit: number; salesCount: number; soldItemsSummary: string }) => void;
@@ -34,6 +36,8 @@ interface SalesHistoryProps {
 export default function SalesHistory({ 
   sales, 
   clients, 
+  products,
+  receiptsList = [],
   onCancelSale, 
   onReprintInvoice,
   onCloseDay,
@@ -112,12 +116,107 @@ export default function SalesHistory({
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(fullMsg)}`, "_blank");
   };
 
+  // Helper to find matching financing contract
+  const findMatchingContract = (receipt: CustomReceipt, allReceipts: CustomReceipt[]) => {
+    if (receipt.type === "inicio") return receipt;
+    const invNum = (receipt.invoiceNumber || "").trim().toLowerCase();
+    if (!invNum) return null;
+    return allReceipts.find(other => 
+      other.type === "inicio" && 
+      ((other.receiptNumber || "").trim().toLowerCase() === invNum || 
+       (other.invoiceNumber || "").trim().toLowerCase() === invNum)
+    );
+  };
+
+  // Helper to calculate total cost and selling price of a financing contract
+  const getFinancingContractCostAndPrice = (contractReceipt: CustomReceipt, productsList: Product[]) => {
+    let totalCost = 0;
+    let totalSellingPrice = contractReceipt.totalAmount || 0;
+    
+    if (contractReceipt.financedItems && contractReceipt.financedItems.length > 0) {
+      contractReceipt.financedItems.forEach(item => {
+        if (item.productId) {
+          const prod = productsList.find(p => p.id === item.productId);
+          if (prod) {
+            totalCost += (prod.costPrice || 0) * (item.quantity || 1);
+          }
+        }
+      });
+    } else if (contractReceipt.productId) {
+      const prod = productsList.find(p => p.id === contractReceipt.productId);
+      if (prod) {
+        totalCost += (prod.costPrice || 0) * (contractReceipt.productQty || 1);
+      }
+    }
+    
+    return { totalCost, totalSellingPrice };
+  };
+
+  // Helper for checking if date is today (same local day)
+  const isSameDay = (dateStr1: string, dateStr2: string) => {
+    try {
+      const d1 = new Date(dateStr1);
+      const d2 = new Date(dateStr2);
+      return d1.getFullYear() === d2.getFullYear() &&
+             d1.getMonth() === d2.getMonth() &&
+             d1.getDate() === d2.getDate();
+    } catch (e) {
+      return false;
+    }
+  };
+
+  const todayStr = new Date().toISOString();
+
+  // Helper for single receipt income and profit
+  const getReceiptIncomeAndProfit = (r: CustomReceipt) => {
+    let income = 0;
+    let profit = 0;
+    
+    if (r.type === "inicio") {
+      income = r.montoInicial || 0;
+      const { totalCost, totalSellingPrice } = getFinancingContractCostAndPrice(r, products);
+      const margin = totalSellingPrice > 0 ? (totalSellingPrice - totalCost) / totalSellingPrice : 1;
+      profit = income * margin;
+    } else if (r.type === "cuota") {
+      income = r.abonoCuotas || 0;
+      const contract = findMatchingContract(r, receiptsList);
+      if (contract) {
+        const { totalCost, totalSellingPrice } = getFinancingContractCostAndPrice(contract, products);
+        const margin = totalSellingPrice > 0 ? (totalSellingPrice - totalCost) / totalSellingPrice : 1;
+        profit = income * margin;
+      } else {
+        profit = income;
+      }
+    } else if (r.type === "completo") {
+      const contract = findMatchingContract(r, receiptsList);
+      if (contract) {
+        // If contract exists, this completes it. The money was paid via cuotas/inicio. 
+        // To avoid double-counting, completo adds no new income.
+        income = 0;
+        profit = 0;
+      } else {
+        // Standalone completo receipt is a direct sale
+        income = r.totalAmount || 0;
+        let cost = 0;
+        if (r.productId) {
+          const prod = products.find(p => p.id === r.productId);
+          if (prod) {
+            cost = (prod.costPrice || 0) * (r.productQty || 1);
+          }
+        }
+        profit = Math.max(0, income - cost);
+      }
+    }
+    
+    return { income, profit };
+  };
+
   // Sum calculations
-  const totalSalesVolume = sales.reduce((acc, s) => acc + s.total, 0);
+  const todaySalesVolume = sales.reduce((acc, s) => acc + s.total, 0);
   const totalItbisVolume = sales.reduce((acc, s) => acc + s.itbis, 0);
   
   // Cost & Profit calculations
-  const totalCostOfSales = sales.reduce((acc, s) => {
+  const todayCostOfSales = sales.reduce((acc, s) => {
     const saleCost = s.items.reduce((itemAcc, item) => {
       const cost = item.product.costPrice || 0;
       return itemAcc + (cost * item.quantity);
@@ -125,7 +224,32 @@ export default function SalesHistory({
     return acc + saleCost;
   }, 0);
 
-  const totalNetProfit = totalSalesVolume - totalCostOfSales;
+  const todaySalesProfit = todaySalesVolume - todayCostOfSales;
+
+  // --- Today's Financing Receipts ---
+  const todayFinancingIncome = receiptsList
+    .filter(r => isSameDay(r.date, todayStr))
+    .reduce((acc, r) => acc + getReceiptIncomeAndProfit(r).income, 0);
+
+  const todayFinancingProfit = receiptsList
+    .filter(r => isSameDay(r.date, todayStr))
+    .reduce((acc, r) => acc + getReceiptIncomeAndProfit(r).profit, 0);
+
+  // --- Today's Combined Totals (Used for daily closures) ---
+  const todayNetIncome = todaySalesVolume + todayFinancingIncome;
+  const todayNetProfit = todaySalesProfit + todayFinancingProfit;
+
+  // --- All Time Cumulative Totals ---
+  const historicalIncome = closures.reduce((acc, c) => acc + c.totalSales, 0);
+  const historicalProfit = closures.reduce((acc, c) => acc + c.totalProfit, 0);
+
+  const totalNetIncomeAllTime = historicalIncome + todayNetIncome;
+  const totalNetProfitAllTime = historicalProfit + todayNetProfit;
+
+  // Compatibility overrides
+  const totalSalesVolume = todayNetIncome; // Redirect totalSalesVolume to represent today's combined net income
+  const totalNetProfit = totalNetProfitAllTime; // Redirect totalNetProfit to total cumulative net profit
+  const totalCostOfSales = todayCostOfSales;
 
   const cashSales = sales.filter((s) => s.paymentMethod === "Efectivo").reduce((acc, s) => acc + s.total, 0);
   const cardSales = sales.filter((s) => s.paymentMethod === "Tarjeta").reduce((acc, s) => acc + s.total, 0);
@@ -254,20 +378,80 @@ export default function SalesHistory({
 
       {!showClosureHistory ? (
         <>
+          {/* Métricas de Ingreso Neto y Ganancia Neta */}
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-xs mb-4 space-y-3">
+            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+              <Sparkles className="h-4 w-4 text-emerald-500" />
+              Métricas Principales de Rendimiento Financiero
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Metric: Ingreso Neto de Hoy */}
+              <div className="bg-white p-4 rounded-xl border border-sky-250 shadow-xs flex flex-col justify-between ring-2 ring-sky-500/5">
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] text-sky-850 font-extrabold uppercase tracking-tight">Ingreso Neto de Hoy</span>
+                  <span className="p-1 bg-sky-100 text-sky-700 rounded text-[9px] font-bold">HOY</span>
+                </div>
+                <div className="mt-2 text-lg font-extrabold text-sky-800 font-mono">
+                  RD${todayNetIncome.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                </div>
+                <span className="text-[9px] text-sky-600 mt-1 font-medium">POS + Abonos cuotas hoy</span>
+              </div>
+
+              {/* Metric: Ganancia Neta de Hoy */}
+              <div className="bg-white p-4 rounded-xl border border-emerald-300 shadow-xs flex flex-col justify-between ring-2 ring-emerald-500/5">
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] text-emerald-800 font-extrabold uppercase tracking-tight flex items-center gap-1">
+                    Ganancia Neta de Hoy
+                    <Sparkles className="h-2.5 w-2.5 text-amber-500" />
+                  </span>
+                  <span className="p-1 bg-emerald-100 text-emerald-700 rounded text-[9px] font-bold">HOY</span>
+                </div>
+                <div className="mt-2 text-lg font-extrabold text-emerald-700 font-mono">
+                  RD${todayNetProfit.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                </div>
+                <span className="text-[9px] text-emerald-600 mt-1 font-medium">Margen real de cobros de hoy</span>
+              </div>
+
+              {/* Metric: Ingreso Neto Total */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-tight">Ingreso Neto Total</span>
+                  <span className="p-1 bg-slate-100 text-slate-600 rounded text-[9px] font-bold">ACUMULADO</span>
+                </div>
+                <div className="mt-2 text-lg font-extrabold text-slate-700 font-mono">
+                  RD${totalNetIncomeAllTime.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                </div>
+                <span className="text-[9px] text-slate-400 mt-1">Cierres guardados + hoy</span>
+              </div>
+
+              {/* Metric: Ganancia Neta Total */}
+              <div className="bg-white p-4 rounded-xl border border-emerald-100 shadow-xs flex flex-col justify-between">
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] text-emerald-600 font-extrabold uppercase tracking-tight">Ganancia Neta Total</span>
+                  <span className="p-1 bg-emerald-50 text-emerald-700 rounded text-[9px] font-bold">ACUMULADO</span>
+                </div>
+                <div className="mt-2 text-lg font-extrabold text-emerald-800 font-mono">
+                  RD${totalNetProfitAllTime.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                </div>
+                <span className="text-[9px] text-emerald-600 mt-1">Cierres guardados + hoy</span>
+              </div>
+            </div>
+          </div>
+
           {/* Top Owner summary stats cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
             {/* Metric 1 - Total Ventas */}
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
               <div className="flex justify-between items-start">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-tight">Total Involucrado (Ventas)</span>
-                <span className="p-1 bg-emerald-50 text-emerald-600 rounded">
+                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-tight">Total Involucrado (POS)</span>
+                <span className="p-1 bg-slate-50 text-slate-600 rounded">
                   <TrendingUp className="h-3.5 w-3.5" />
                 </span>
               </div>
               <div className="mt-2 text-base font-black text-slate-800 font-mono">
-                RD${totalSalesVolume.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                RD${todaySalesVolume.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
               </div>
-              <span className="text-[9px] text-slate-400 mt-1">Bruto del día</span>
+              <span className="text-[9px] text-slate-400 mt-1">Bruto del día (sin abonos)</span>
             </div>
 
             {/* Metric Costo */}
@@ -279,24 +463,9 @@ export default function SalesHistory({
                 </span>
               </div>
               <div className="mt-2 text-base font-black text-slate-500 font-mono">
-                RD${totalCostOfSales.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                RD${todayCostOfSales.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
               </div>
               <span className="text-[9px] text-slate-400 mt-1">Precio total compra</span>
-            </div>
-
-            {/* Metric Ingreso Neto */}
-            <div className="bg-white p-4 rounded-xl border border-emerald-300 shadow-xs flex flex-col justify-between ring-2 ring-emerald-500/5">
-              <div className="flex justify-between items-start">
-                <span className="text-[10px] text-emerald-800 font-bold uppercase tracking-tight flex items-center gap-1 leading-none">
-                  Ganancia Neta
-                  <Sparkles className="h-2.5 w-2.5 text-amber-500" />
-                </span>
-                <span className="p-1 bg-emerald-100 text-emerald-700 rounded text-[9px] font-bold">NETO</span>
-              </div>
-              <div className="mt-2 text-base font-extrabold text-emerald-700 font-mono">
-                RD${totalNetProfit.toLocaleString("es-DO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
-              </div>
-              <span className="text-[9px] text-emerald-600 mt-1">Ingreso real limpio</span>
             </div>
 
             {/* Metric ITBIS */}
@@ -321,7 +490,7 @@ export default function SalesHistory({
                   <Coins className="h-3.5 w-3.5" />
                 </span>
               </div>
-              <div className="mt-2 text-base font-black text-slate-75 *font-mono">
+              <div className="mt-2 text-base font-black text-slate-750 font-mono">
                 RD${cashSales.toLocaleString("es-DO", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
               </div>
               <span className="text-[9px] text-slate-400 mt-1">Monedas/Billetes</span>
@@ -331,7 +500,7 @@ export default function SalesHistory({
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
               <div className="flex justify-between items-start">
                 <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-tight">Crédito (Fiao)</span>
-                <span className="p-1 bg-rose-50 text-rose-605 rounded">
+                <span className="p-1 bg-rose-50 text-rose-600 rounded">
                   <Users className="h-3.5 w-3.5" />
                 </span>
               </div>

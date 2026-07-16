@@ -8,6 +8,7 @@ export interface Product {
   category: string;
   itbisRate: 0 | 18 | 16 | 8; // DR ITBIS rates (0 for exempt, 18 for standard, 16, 8)
   minStock?: number;
+  financingPrice?: number; // Optional financing price
 }
 
 export interface CartItem {
@@ -26,7 +27,7 @@ export interface Client {
 
 export type PaymentMethod = "Efectivo" | "Tarjeta" | "Transferencia" | "Crédito" | "Fiado";
 
-export type NcfType = "B01" | "B02" | "NINGUNO"; // B01 = Fiscal Credit, B02 = Final Consumer
+export type NcfType = "B01" | "B02" | "E31" | "E32" | "NINGUNO"; // B01 = Fiscal Credit, B02 = Final Consumer, E31 = Electronic Fiscal Credit, E32 = Electronic Consumer
 
 export interface Sale {
   id: string;
@@ -43,6 +44,18 @@ export interface Sale {
   receivedAmount?: number;
   changeAmount?: number;
   note?: string;
+  serviceFeeAmount?: number;
+  serviceFeeDescription?: string;
+  isServiceFeeReal?: boolean;
+  // e-CF (Electronic Invoicing DGII) fields
+  ecfType?: "E31" | "E32" | "E33" | "E34" | "E41" | "E43" | "E44" | "E45";
+  ecfCode?: string; // e.g. E310000000001
+  ecfStatus?: "Sin Enviar" | "Aceptado" | "Rechazado" | "Aceptado con Observaciones";
+  ecfResponseCode?: string;
+  ecfResponseMsg?: string;
+  ecfSignedXml?: string;
+  ecfAcuseRecibo?: string;
+  ecfSentDate?: string;
 }
 
 export interface PaymentRecord {
@@ -87,6 +100,7 @@ export interface CustomReceipt {
   phone2: string;
   rnc: string;
   direccion: string;
+  businessName?: string;
   
   // Product info
   productDescription: string;
@@ -112,4 +126,13 @@ export interface CustomReceipt {
   fiadorNombre: string;
   fiadorCedula: string;
   garantia: string;
+  status?: "Activo" | "Finalizado";
+  productId?: string;
+  financedItems?: {
+    id: string;
+    name: string;
+    price: number;
+    quantity: number;
+    productId?: string;
+  }[];
 }

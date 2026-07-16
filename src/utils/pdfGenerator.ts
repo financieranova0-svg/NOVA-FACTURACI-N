@@ -10,7 +10,9 @@ export interface BusinessConfig {
 }
 
 export function getBusinessConfig(userEmail: string): BusinessConfig {
-  const stored = localStorage.getItem(`nova_business_config_${userEmail}`);
+  const cleanEmail = String(userEmail || "").trim().toLowerCase();
+  const mappedEmail = cleanEmail === "marialuzgonzalez1234568@gmail.com" ? "luisrodriguezgon22@gmail.com" : cleanEmail;
+  const stored = localStorage.getItem(`nova_business_config_${mappedEmail}`);
   if (stored) {
     try {
       return JSON.parse(stored);
@@ -29,8 +31,17 @@ export function getBusinessConfig(userEmail: string): BusinessConfig {
 
 export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "thermal" | "letter" = "letter"): Blob {
   let finalFormat: string | [number, number] = "a4";
+  let noteLines: string[] = [];
 
   if (format === "thermal") {
+    // Generate lines list using a temporary doc to know the exact height needed
+    if (sale.note) {
+      const dummy = new jsPDF({ orientation: "portrait", unit: "mm", format: [80, 500] });
+      dummy.setFont("courier", "normal");
+      dummy.setFontSize(7.5);
+      noteLines = dummy.splitTextToSize(sale.note.toUpperCase(), 70);
+    }
+
     let estimatedHeight = 10; // Initial start offset
     estimatedHeight += 5;     // Address spacing
     estimatedHeight += 4;     // RNC/TEL line spacing
@@ -52,12 +63,21 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
     
     // Items list (4.5mm per item)
     estimatedHeight += sale.items.length * 4.5;
+    if (sale.serviceFeeAmount) {
+      estimatedHeight += 4.5;
+    }
     
     estimatedHeight += 5;     // Divider line spacing
     estimatedHeight += 5;     // Subtotal line spacing
     estimatedHeight += 4.5;   // ITBIS line spacing
     estimatedHeight += 5;     // Total line spacing
     estimatedHeight += 6;     // Payment condition line spacing
+    
+    if (sale.note && noteLines.length > 0) {
+      estimatedHeight += 4.5; // label "OBSERVACIÓN COMPRA:"
+      estimatedHeight += noteLines.length * 4.5; // height for lines
+    }
+
     estimatedHeight += 8;     // Thank you line spacing
     estimatedHeight += 4;     // DGII certified line spacing
     estimatedHeight += 12;    // Sane bottom padding margin to prevent any cutoff
@@ -94,6 +114,12 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
     y += 4;
     doc.setFont("courier", "normal");
     doc.text(`FECHA  : ${new Date(sale.date).toLocaleString("es-DO")}`, 5, y);
+
+    if (sale.serviceFeeAmount) {
+      y += 4.5;
+      doc.setFont("courier", "bold");
+      doc.text(`M. SERV: RD$${sale.serviceFeeAmount.toFixed(0)} (${(sale.serviceFeeDescription || "Servicio").substring(0, 15)})`, 5, y);
+    }
     
     if (sale.ncfCode) {
       y += 4;
@@ -155,9 +181,14 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
       y += 4.5;
       doc.setFont("courier", "bold");
       doc.text("OBSERVACIÓN COMPRA:", 5, y);
-      y += 4;
       doc.setFont("courier", "normal");
-      doc.text(sale.note.substring(0, 36).toUpperCase(), 5, y);
+      doc.setFontSize(7.5);
+      
+      const lines = doc.splitTextToSize(sale.note.toUpperCase(), 70);
+      lines.forEach((line: string) => {
+        y += 4.5;
+        doc.text(line, 5, y);
+      });
     }
 
     y += 8;
@@ -300,6 +331,26 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
     doc.setDrawColor(226, 232, 240);
     doc.line(15, currentY, 195, currentY);
 
+    if (sale.serviceFeeAmount) {
+      doc.setFillColor(240, 253, 250); // light emerald green
+      doc.setDrawColor(209, 250, 229);
+      doc.roundedRect(15, currentY + 3, 90, 16, 1.5, 1.5, "FD");
+      
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(7.5);
+      doc.setTextColor(5, 150, 105); // emerald-600
+      doc.text(sale.isServiceFeeReal ? "COBRO POR SERVICIO (REGISTRADO)" : "COBRO POR SERVICIO (INCLUIDO)", 18, currentY + 8);
+      
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(30, 41, 59);
+      const descText = `Servicio: ${sale.serviceFeeDescription || "Servicio técnico"}`;
+      doc.text(descText.length > 45 ? descText.substring(0, 42) + "..." : descText, 18, currentY + 12);
+      
+      doc.setFont("helvetica", "bold");
+      doc.text(`Monto: RD$ ${sale.serviceFeeAmount.toFixed(2)}`, 18, currentY + 16);
+    }
+
     currentY += 3;
     // Calculation ledger
     doc.setFont("helvetica", "normal");
@@ -325,25 +376,37 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
 
     // Conditional info e.g. change info
     if (sale.receivedAmount !== undefined && sale.changeAmount !== undefined) {
-      currentY += 16;
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.setTextColor(100, 116, 139);
-      doc.text(`Efectivo Recibido: RD$ ${sale.receivedAmount.toFixed(0)} | Devuelto: RD$ ${sale.changeAmount.toFixed(0)}`, 193, currentY, { align: "right" });
+      currentY += 22; // Well below Total Facturado line which was at currentY + 15
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105); // slate-600 for clear legibility
+      doc.text(`Efectivo Recibido: RD$ ${sale.receivedAmount.toLocaleString("es-DO")} | Devuelto: RD$ ${sale.changeAmount.toLocaleString("es-DO")}`, 193, currentY, { align: "right" });
+      currentY += 4;
     } else {
-      currentY += 10;
+      currentY += 16;
     }
 
     if (sale.note) {
       currentY += 6;
-      doc.setFillColor(245, 247, 250);
-      doc.roundedRect(15, currentY, 180, 10, 1, 1, "F");
-      
       doc.setFont("helvetica", "bold");
       doc.setFontSize(7.5);
       doc.setTextColor(71, 85, 105);
-      doc.text(`DETALLE / OBSERVACIÓN COMPRADOR: ${sale.note.toUpperCase()}`, 18, currentY + 6.5);
-      currentY += 10;
+      
+      const fullNoteText = `DETALLE / OBSERVACIÓN COMPRADOR: ${sale.note.toUpperCase()}`;
+      // Split note text to fit inside 180mm box width with 3mm margin on each side (printable width 174)
+      const lines = doc.splitTextToSize(fullNoteText, 174);
+      const boxHeight = (lines.length * 4.5) + 4; // 4.5mm per line plus padding
+      
+      doc.setFillColor(245, 247, 250);
+      doc.roundedRect(15, currentY, 180, boxHeight, 1, 1, "F");
+      
+      let textY = currentY + 4.5;
+      lines.forEach((line: string) => {
+        doc.text(line, 18, textY);
+        textY += 4.5;
+      });
+      
+      currentY += boxHeight;
     } else {
       currentY += 4;
     }

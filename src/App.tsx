@@ -44,6 +44,7 @@ import Inventory from "./components/Inventory";
 import Clients from "./components/Clients";
 import SalesHistory from "./components/SalesHistory";
 import Receipts from "./components/Receipts";
+import DgiieCF from "./components/DgiieCF";
 import { generateInvoicePDF, getBusinessConfig, BusinessConfig } from "./utils/pdfGenerator";
 
 const DEFAULT_USERS: AppUser[] = [
@@ -81,8 +82,8 @@ export function getOperatingEmail(email: string): string {
 }
 
 export default function App() {
-  // Tabs: pos, inventory, clients, sales, admin, profile, receipts
-  const [activeTab, setActiveTab] = useState<"pos" | "inventory" | "clients" | "sales" | "admin" | "profile" | "receipts">("pos");
+  // Tabs: pos, inventory, clients, sales, admin, profile, receipts, dgiiecf
+  const [activeTab, setActiveTab] = useState<"pos" | "inventory" | "clients" | "sales" | "admin" | "profile" | "receipts" | "dgiiecf">("pos");
 
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -112,7 +113,7 @@ export default function App() {
   const [adminAlert, setAdminAlert] = useState<{ title: string; message: string; type: "error" | "success" | "warning" } | null>(null);
 
   // NCF invoice numbering sequence state
-  const [ncfCounts, setNcfCounts] = useState({ B01: 1, B02: 1 });
+  const [ncfCounts, setNcfCounts] = useState({ B01: 1, B02: 1, E31: 1, E32: 1 });
 
   // Receipt reprint simulation
   const [reprintSale, setReprintSale] = useState<Sale | null>(null);
@@ -245,7 +246,7 @@ export default function App() {
       setSales([]);
       setClosures([]);
       setReceipts([]);
-      setNcfCounts({ B01: 1, B02: 1 });
+      setNcfCounts({ B01: 1, B02: 1, E31: 1, E32: 1 });
       setLocalVersion(0);
       return;
     }
@@ -443,9 +444,12 @@ export default function App() {
       // NCF Sequence Isolation
       const storedNcf = localStorage.getItem(`factura_pos_ncf_${email}`);
       if (storedNcf) {
-        setNcfCounts(JSON.parse(storedNcf));
+        const parsed = JSON.parse(storedNcf);
+        if (parsed.E31 === undefined) parsed.E31 = 1;
+        if (parsed.E32 === undefined) parsed.E32 = 1;
+        setNcfCounts(parsed);
       } else {
-        const defaultNcf = { B01: 1, B02: 1 };
+        const defaultNcf = { B01: 1, B02: 1, E31: 1, E32: 1 };
         setNcfCounts(defaultNcf);
         localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(defaultNcf));
       }
@@ -490,7 +494,7 @@ export default function App() {
             const localProducts = JSON.parse(localStorage.getItem(`factura_pos_products_${email}`) || "[]");
             const localClients = JSON.parse(localStorage.getItem(`factura_pos_clients_${email}`) || "[]");
             const localSales = JSON.parse(localStorage.getItem(`factura_pos_sales_${email}`) || "[]");
-            const localNcf = JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1}');
+            const localNcf = JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1,"E31":1,"E32":1}');
             const localClosures = JSON.parse(localStorage.getItem(`factura_pos_closures_${email}`) || "[]");
             const localReceipts = JSON.parse(localStorage.getItem(`factura_pos_custom_receipts_${email}`) || "[]");
 
@@ -518,7 +522,7 @@ export default function App() {
           setSales(data.sales || []);
           setClosures(data.closures || []);
           setReceipts(data.receipts || []);
-          setNcfCounts(data.ncfCount || { B01: 1, B02: 1 });
+          setNcfCounts(data.ncfCount || { B01: 1, B02: 1, E31: 1, E32: 1 });
           setLocalVersion(serverVersion);
 
           localStorage.setItem(`factura_pos_products_${email}`, JSON.stringify(data.products || []));
@@ -526,7 +530,7 @@ export default function App() {
           localStorage.setItem(`factura_pos_sales_${email}`, JSON.stringify(data.sales || []));
           localStorage.setItem(`factura_pos_closures_${email}`, JSON.stringify(data.closures || []));
           localStorage.setItem(`factura_pos_custom_receipts_${email}`, JSON.stringify(data.receipts || []));
-          localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(data.ncfCount || { B01: 1, B02: 1 }));
+          localStorage.setItem(`factura_pos_ncf_${email}`, JSON.stringify(data.ncfCount || { B01: 1, B02: 1, E31: 1, E32: 1 }));
           localStorage.setItem(`factura_pos_version_${email}`, String(serverVersion));
           
           lastFetchedVersionRef.current = serverVersion;
@@ -535,7 +539,7 @@ export default function App() {
           const localProducts = JSON.parse(localStorage.getItem(`factura_pos_products_${email}`) || "[]");
           const localClients = JSON.parse(localStorage.getItem(`factura_pos_clients_${email}`) || "[]");
           const localSales = JSON.parse(localStorage.getItem(`factura_pos_sales_${email}`) || "[]");
-          const localNcf = JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1}');
+          const localNcf = JSON.parse(localStorage.getItem(`factura_pos_ncf_${email}`) || '{"B01":1,"B02":1,"E31":1,"E32":1}');
           const localClosures = JSON.parse(localStorage.getItem(`factura_pos_closures_${email}`) || "[]");
           const localReceipts = JSON.parse(localStorage.getItem(`factura_pos_custom_receipts_${email}`) || "[]");
 
@@ -770,10 +774,16 @@ export default function App() {
 
     // If it was custom NCF, step sequence up by 1
     if (newSale.ncfType === "B01") {
-      const nextNcf = { ...ncfCounts, B01: ncfCounts.B01 + 1 };
+      const nextNcf = { ...ncfCounts, B01: (ncfCounts.B01 || 1) + 1 };
       saveNcfToStorage(nextNcf);
     } else if (newSale.ncfType === "B02") {
-      const nextNcf = { ...ncfCounts, B02: ncfCounts.B02 + 1 };
+      const nextNcf = { ...ncfCounts, B02: (ncfCounts.B02 || 1) + 1 };
+      saveNcfToStorage(nextNcf);
+    } else if (newSale.ncfType === "E31") {
+      const nextNcf = { ...ncfCounts, E31: (ncfCounts.E31 || 1) + 1 };
+      saveNcfToStorage(nextNcf);
+    } else if (newSale.ncfType === "E32") {
+      const nextNcf = { ...ncfCounts, E32: (ncfCounts.E32 || 1) + 1 };
       saveNcfToStorage(nextNcf);
     }
   };
@@ -1386,6 +1396,22 @@ export default function App() {
           </button>
 
           <button
+            id="tab-dgiiecf"
+            onClick={() => {
+              setActiveTab("dgiiecf");
+              setReprintSale(null);
+            }}
+            className={`py-3.5 px-4.5 text-xs font-black flex items-center gap-1.5 border-b-2 transition duration-150 shrink-0 uppercase cursor-pointer ${
+              activeTab === "dgiiecf"
+                ? "border-blue-600 text-blue-700 font-black"
+                : "border-transparent text-slate-500 hover:text-slate-850 hover:border-slate-300"
+            }`}
+          >
+            <Shield className="h-4 w-4 text-blue-600" />
+            Facturación DGII 🇩🇴
+          </button>
+
+          <button
             id="tab-profile"
             onClick={() => {
               setActiveTab("profile");
@@ -1427,6 +1453,7 @@ export default function App() {
           <POS
             products={products}
             clients={clients}
+            receiptsList={receipts}
             onAddSale={handleAddSale}
             onUpdateStock={handleUpdateStock}
             onUpdateClientDebt={handleUpdateClientDebt}
@@ -1437,6 +1464,7 @@ export default function App() {
         {activeTab === "inventory" && (
           <Inventory
             products={products}
+            receiptsList={receipts}
             onAddProduct={handleAddProduct}
             onUpdateFullProductList={handleUpdateFullProductList}
             onDeleteProduct={handleDeleteProduct}
@@ -1456,6 +1484,8 @@ export default function App() {
           <SalesHistory
             sales={sales}
             clients={clients}
+            products={products}
+            receiptsList={receipts}
             onCancelSale={handleCancelSale}
             onReprintInvoice={(saleToReprint, preferredFormat) => {
               setReprintSale(saleToReprint);
@@ -1942,6 +1972,20 @@ export default function App() {
             products={products}
             receiptsList={receipts}
             onSaveReceipts={saveReceiptsToStorage}
+            onUpdateStock={handleUpdateStock}
+            onAddSale={handleAddSale}
+          />
+        )}
+
+        {activeTab === "dgiiecf" && (
+          <DgiieCF
+            sales={sales}
+            clients={clients}
+            onUpdateSale={(updatedSale) => {
+              const updated = sales.map(s => s.id === updatedSale.id ? updatedSale : s);
+              saveSalesToStorage(updated);
+            }}
+            loggedUserEmail={currentUser ? getOperatingEmail(currentUser.email) : "guest"}
           />
         )}
       </main>
@@ -2023,6 +2067,15 @@ export default function App() {
                     <span>FACTURA #:</span>
                     <span>{reprintSale.invoiceNumber}</span>
                   </div>
+                  {reprintSale.serviceFeeAmount && (
+                    <div className="my-1.5 p-1 border border-emerald-250 bg-emerald-50/20 rounded text-[9px] text-emerald-800">
+                      <span className="block font-bold uppercase tracking-wider text-[8px] text-emerald-650 mb-0.5">Monto por Servicio (Incluido en Total)</span>
+                      <div className="flex justify-between font-bold font-mono">
+                        <span className="truncate max-w-[170px]">{reprintSale.serviceFeeDescription}</span>
+                        <span>RD${reprintSale.serviceFeeAmount.toFixed(0)}</span>
+                      </div>
+                    </div>
+                  )}
                   {reprintSale.ncfCode && (
                     <div className="flex justify-between font-bold bg-amber-50 p-0.5 border border-amber-200/40 text-[9.5px]">
                       <span>COMPROBANTE NCF:</span>
@@ -2153,8 +2206,19 @@ export default function App() {
                     </tbody>
                   </table>
 
-                  {/* Totals box */}
-                  <div className="flex justify-end pt-2 border-t border-slate-200">
+                  {/* Totals and service box */}
+                  <div className="flex justify-between items-start pt-2 border-t border-slate-200">
+                    <div>
+                      {reprintSale.serviceFeeAmount && (
+                        <div className="max-w-xs p-2 border border-emerald-200 bg-emerald-50/25 rounded text-[10px] text-emerald-800">
+                          <span className="block font-bold uppercase tracking-wider text-[8px] text-emerald-600 mb-0.5">
+                            {reprintSale.isServiceFeeReal ? "Cobro por Servicio (Registrado)" : "Monto por Servicio (Incluido)"}
+                          </span>
+                          <p className="font-semibold text-slate-800">Servicio: {reprintSale.serviceFeeDescription}</p>
+                          <p className="font-mono font-bold text-emerald-700 mt-0.5">Valor del Servicio: RD$ {reprintSale.serviceFeeAmount.toFixed(2)}</p>
+                        </div>
+                      )}
+                    </div>
                     <div className="w-64 space-y-1 text-right font-mono text-[11px]">
                       <div className="flex justify-between text-slate-500">
                         <span>Total Neto Gravado:</span>
@@ -2168,6 +2232,11 @@ export default function App() {
                         <span>Total Factura RD$:</span>
                         <span>RD$ {reprintSale.total.toFixed(2)}</span>
                       </div>
+                      {reprintSale.receivedAmount !== undefined && reprintSale.changeAmount !== undefined && (
+                        <div className="text-[10px] text-slate-600 font-bold mt-1.5 text-right bg-slate-50 border border-slate-150 p-1 rounded font-mono">
+                          Efectivo Recibido: RD$ {reprintSale.receivedAmount.toLocaleString("es-DO")} | Devuelto: RD$ {reprintSale.changeAmount.toLocaleString("es-DO")}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -2295,7 +2364,7 @@ export default function App() {
                         printWindow.document.write(`
                           <html>
                             <head>
-                              <title>Imprimir Factura - Nova Facturación</title>
+                              <title>Imprimir Factura</title>
                               <style>
                                 @page {
                                   size: ${reprintFormat === "thermal" ? "80mm auto" : "letter"};

@@ -20,7 +20,7 @@ import {
   RotateCcw,
   X
 } from "lucide-react";
-import { Product, Client, CartItem, PaymentMethod, NcfType, Sale } from "../types";
+import { Product, Client, CartItem, PaymentMethod, NcfType, Sale, CustomReceipt } from "../types";
 import { INITIAL_CATEGORIES, generateNcfCode } from "../data";
 import ScannerCamera from "./ScannerCamera";
 import { getBusinessConfig, generateInvoicePDF } from "../utils/pdfGenerator";
@@ -29,15 +29,17 @@ import { useMemo } from "react";
 interface POSProps {
   products: Product[];
   clients: Client[];
+  receiptsList?: CustomReceipt[];
   onAddSale: (sale: Sale) => void;
   onUpdateStock: (productId: string, quantityToDeduct: number) => void;
   onUpdateClientDebt: (clientId: string, debtToAdd: number) => void;
-  currentNcfCounts: { B01: number; B02: number };
+  currentNcfCounts: { B01: number; B02: number; E31?: number; E32?: number };
 }
 
 export default function POS({ 
   products, 
   clients, 
+  receiptsList = [],
   onAddSale, 
   onUpdateStock, 
   onUpdateClientDebt,
@@ -57,11 +59,42 @@ export default function POS({
     creditLimit: 0,
     rnc: ""
   };
+  const DOMINICAN_RNC_REGISTRY_CLIENT: Record<string, { name: string; type: string }> = {
+    "101001501": { name: "BANCO POPULAR DOMINICANO, S.A.", type: "Persona Jurídica" },
+    "101000106": { name: "BANCO DE RESERVAS DE LA REPUBLICA DOMINICANA", type: "Persona Jurídica" },
+    "101010372": { name: "CERVECERIA NACIONAL DOMINICANA, S.A.", type: "Persona Jurídica" },
+    "101135293": { name: "CLARO DOMINICANA (COMPAÑIA DOMINICANA DE TELEFONOS, S.A.)", type: "Persona Jurídica" },
+    "101122841": { name: "ALTICE DOMINICANA, S.A.", type: "Persona Jurídica" },
+    "101021439": { name: "GRUPO RAMOS, S.A.", type: "Persona Jurídica" },
+    "101831846": { name: "BRAVO, S.A.", type: "Persona Jurídica" },
+    "101011409": { name: "CENTRO CUESTA NACIONAL (CCN), S.A.S.", type: "Persona Jurídica" },
+    "101116132": { name: "DIRECCION GENERAL DE IMPUESTOS INTERNOS (DGII)", type: "Persona Jurídica" },
+    "131455642": { name: "COLMADO HERMANO JUAN (MAYORISTA)", type: "Persona Jurídica" },
+    "101017962": { name: "INDUVECA, S.A.", type: "Persona Jurídica" },
+    "101000629": { name: "MERCASID, S.A.", type: "Persona Jurídica" },
+    "101010135": { name: "SOCIEDAD INDUSTRIAL DOMINICANA, S.A. (SID)", type: "Persona Jurídica" },
+    "101014168": { name: "BEPENSA DOMINICANA, S.A. (COCA-COLA DR)", type: "Persona Jurídica" },
+    "101010631": { name: "ASOCIACION POPULAR DE AHORROS Y PRESTAMOS (APAP)", type: "Persona Jurídica" },
+    "101007429": { name: "NESTLE DOMINICANA, S.A.", type: "Persona Jurídica" },
+    "101562215": { name: "WIND TELECOM, S.A.", type: "Persona Jurídica" },
+    "05900141424": { name: "MANUEL FRANCISCO VICTORIO ROJAS", type: "Persona Física" },
+  };
+
   const setSelectedClient = (client: Client) => {
     setSelectedClientState(client);
+    if (client.rnc) {
+      setCompanyRnc(client.rnc);
+    } else {
+      setCompanyRnc("");
+    }
   };
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Efectivo");
   const [ncfType, setNcfType] = useState<NcfType>("NINGUNO");
+  
+  // Custom service fee state
+  const [serviceDescription, setServiceDescription] = useState("");
+  const [serviceAmount, setServiceAmount] = useState("");
+  const [isServiceFeeIncluded, setIsServiceFeeIncluded] = useState(false);
   
   // Scanner and Search inputs
   const [barcodeInput, setBarcodeInput] = useState("");
@@ -80,6 +113,7 @@ export default function POS({
   
   // Invoice print modal state
   const [printedInvoice, setPrintedInvoice] = useState<Sale | null>(null);
+  const [checkoutPrintFormat, setCheckoutPrintFormat] = useState<"thermal" | "letter">("thermal");
 
   // Load dynamic configs inside POS.tsx
   const [bName, setBName] = useState("NOVA FACTURACIÓN S.R.L");
@@ -119,7 +153,9 @@ export default function POS({
     setBAddress(addrVal);
     setBLogo(logoVal);
     const freshConfig = { name: nameVal, rnc: rncVal, phone: phoneVal, address: addrVal, logo: logoVal };
-    localStorage.setItem(`nova_business_config_${loggedUserEmail}`, JSON.stringify(freshConfig));
+    const cleanEmail = String(loggedUserEmail || "").trim().toLowerCase();
+    const mappedEmail = cleanEmail === "marialuzgonzalez1234568@gmail.com" ? "luisrodriguezgon22@gmail.com" : cleanEmail;
+    localStorage.setItem(`nova_business_config_${mappedEmail}`, JSON.stringify(freshConfig));
   };
   
   // Focus ref for USB barcode reader
@@ -185,14 +221,43 @@ export default function POS({
     }
   };
 
+  // Calculate quantity of a product currently engaged in active (unfinished) financing contracts
+  const getFinancedPendingQty = (productId: string) => {
+    let pendingQty = 0;
+    receiptsList.forEach(r => {
+      if (r.type === "inicio" && r.status !== "Finalizado") {
+        if (r.financedItems && r.financedItems.length > 0) {
+          r.financedItems.forEach(item => {
+            if (item.productId === productId) {
+              pendingQty += item.quantity || 1;
+            }
+          });
+        } else if (r.productId === productId) {
+          pendingQty += r.productQty || 1;
+        }
+      }
+    });
+    return pendingQty;
+  };
+
+  const getAvailableStock = (product: Product) => {
+    return Math.max(0, product.stock - getFinancedPendingQty(product.id));
+  };
+
   const addToCart = (product: Product) => {
     // Dismiss mobile soft keyboards/focus when manually choosing/clicking a product card
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
 
-    if (product.stock <= 0) {
-      triggerAlert("error", `¡Sin Stock! "${product.name}" no tiene existencias disponibles.`);
+    const availableStock = getAvailableStock(product);
+
+    if (availableStock <= 0) {
+      const pendingQty = getFinancedPendingQty(product.id);
+      const reasonStr = pendingQty > 0 
+        ? ` (Físico: ${product.stock}, Financiado/Reservado: ${pendingQty})`
+        : "";
+      triggerAlert("error", `¡Sin Stock Disponible! "${product.name}" no tiene existencias disponibles para la venta directa${reasonStr}.`);
       return;
     }
 
@@ -202,8 +267,8 @@ export default function POS({
       if (existingIndex > -1) {
         const item = prevCart[existingIndex];
         // Check stock boundary
-        if (item.quantity + 1 > product.stock) {
-          triggerAlert("error", `Límite de stock alcanzado para "${product.name}". Disp: ${product.stock}`);
+        if (item.quantity + 1 > availableStock) {
+          triggerAlert("error", `Límite de stock disponible alcanzado para "${product.name}". Disp. libre: ${availableStock}`);
           return prevCart;
         }
         const updatedCart = [...prevCart];
@@ -227,10 +292,11 @@ export default function POS({
         .map((item) => {
           if (item.product.id === productId) {
             const newQty = item.quantity + delta;
+            const availableStock = getAvailableStock(item.product);
             
             // Check stock limits
-            if (newQty > item.product.stock) {
-              triggerAlert("error", `Máximo stock disponible: ${item.product.stock}`);
+            if (newQty > availableStock) {
+              triggerAlert("error", `Máximo stock disponible libre para venta: ${availableStock}`);
               return item;
             }
             
@@ -255,23 +321,25 @@ export default function POS({
     setChangeAmount(null);
     setCustomClientName("");
     setInvoiceNote("");
+    setServiceDescription("");
+    setServiceAmount("");
+    setIsServiceFeeIncluded(false);
   };
 
   // Computations
   const subtotal = cart.reduce((acc, item) => acc + (item.product.price * item.quantity), 0);
   
+  // Custom service fee
+  const serviceFeeNum = parseFloat(serviceAmount) || 0;
+  
   // ITBIS Breakdown based on product rates
-  // DR standard rates: 18%, 16%, 0%
-  // Formula: ITBIS = Subtotal_affected * (TaxRate / 100) or ITBIS inclusive depending on pricing.
-  // In Dominican retail POS, the price is generally printed as ITBIS inclusive, but here we can treat the price as standard subtotal + tax, or write it beautifully. Let's compute it tax-exclusive, showing standard pricing with tax added, or calculate tax contained. 
-  // Let's do tax-contained or tax added? Tax-added is standard for business (Crédito Fiscal), retail is usually tax-inclusive. Let's make it tax-added and show full clarity. It makes calculation extremely clean!
   const itbis = cart.reduce((acc, item) => {
     const rate = item.product.itbisRate;
     const itemSubtotal = item.product.price * item.quantity;
     return acc + (itemSubtotal * (rate / 100));
   }, 0);
 
-  const total = subtotal + itbis;
+  const total = subtotal + itbis + (isServiceFeeIncluded ? serviceFeeNum : 0);
 
   // Auto-calculate change when cash is received
   useEffect(() => {
@@ -302,7 +370,7 @@ export default function POS({
   }, [selectedClient.id]);
 
   // Handle final invoice submission
-  const handleCheckoutSubmit = (shouldPrint = true) => {
+  const handleCheckoutSubmit = (shouldPrint: "thermal" | "letter" | false = "thermal") => {
     if (cart.length === 0) {
       triggerAlert("error", "El carrito de ventas está vacío.");
       return;
@@ -336,25 +404,36 @@ export default function POS({
     let ncfCode: string | undefined;
     if (ncfType !== "NINGUNO") {
       // Use standard sequence count for simulation
-      const sequence = ncfType === "B01" ? currentNcfCounts.B01 : currentNcfCounts.B02;
+      let sequence = 1;
+      if (ncfType === "B01") {
+        sequence = currentNcfCounts.B01 || 1;
+      } else if (ncfType === "B02") {
+        sequence = currentNcfCounts.B02 || 1;
+      } else if (ncfType === "E31") {
+        sequence = currentNcfCounts.E31 || 1;
+      } else if (ncfType === "E32") {
+        sequence = currentNcfCounts.E32 || 1;
+      }
       ncfCode = generateNcfCode(ncfType, sequence);
     }
 
     const nextInvoiceId = `FAC-${Date.now().toString().slice(-6)}`;
+    const isEcf = ncfType === "E31" || ncfType === "E32";
     const newSale: Sale = {
       id: nextInvoiceId,
       invoiceNumber: nextInvoiceId,
       date: new Date().toISOString(),
       items: [...cart],
-      subtotal,
+      subtotal: subtotal + (isServiceFeeIncluded ? serviceFeeNum : 0),
       itbis,
       total,
       client: selectedClient.id !== "cli-generico"
-        ? selectedClient
+        ? { ...selectedClient, rnc: companyRnc.trim() || selectedClient.rnc }
         : {
             id: "cli-generico",
-            name: customClientName.trim() || "Cliente Contado Genérico",
+            name: customClientName.trim() || (companyRnc.trim() ? `RNC / Cédula: ${companyRnc.trim()}` : "Cliente Contado Genérico"),
             phone: "N/A",
+            rnc: companyRnc.trim() || undefined,
             creditLimit: 0,
             currentDebt: 0
           },
@@ -363,7 +442,13 @@ export default function POS({
       ncfCode,
       receivedAmount: paymentMethod === "Efectivo" ? parseFloat(receivedAmount) : undefined,
       changeAmount: paymentMethod === "Efectivo" && changeAmount !== null ? changeAmount : undefined,
-      note: invoiceNote.trim() || undefined
+      note: invoiceNote.trim() || undefined,
+      serviceFeeAmount: serviceFeeNum > 0 ? serviceFeeNum : undefined,
+      serviceFeeDescription: serviceFeeNum > 0 ? (serviceDescription.trim() || "Servicio técnico / mano de obra") : undefined,
+      isServiceFeeReal: serviceFeeNum > 0 ? isServiceFeeIncluded : undefined,
+      ecfType: isEcf ? (ncfType as any) : undefined,
+      ecfCode: isEcf ? ncfCode : undefined,
+      ecfStatus: isEcf ? "Sin Enviar" : undefined
     };
 
     // Trigger state callbacks
@@ -380,7 +465,8 @@ export default function POS({
     }
 
     // Success state
-    if (shouldPrint) {
+    if (shouldPrint !== false) {
+      setCheckoutPrintFormat(shouldPrint);
       setPrintedInvoice(newSale); // Triggers Print Receipt modal automatically
     } else {
       setPrintedInvoice(null);
@@ -401,7 +487,7 @@ export default function POS({
     try {
       if (!printedInvoice) return;
       const configObj = { name: bName, rnc: bRnc, phone: bPhone, address: bAddress, logo: bLogo };
-      const blob = generateInvoicePDF(printedInvoice, configObj, "thermal");
+      const blob = generateInvoicePDF(printedInvoice, configObj, checkoutPrintFormat);
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
     } catch (e) {
@@ -413,7 +499,7 @@ export default function POS({
     try {
       if (!printedInvoice) return;
       const configObj = { name: bName, rnc: bRnc, phone: bPhone, address: bAddress, logo: bLogo };
-      const blob = generateInvoicePDF(printedInvoice, configObj, "thermal");
+      const blob = generateInvoicePDF(printedInvoice, configObj, checkoutPrintFormat);
       
       const file = new File([blob], `Factura-${printedInvoice.invoiceNumber}.pdf`, { type: "application/pdf" });
 
@@ -572,8 +658,10 @@ export default function POS({
           {/* Product Cards Interactive Area */}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 overflow-y-auto max-h-[420px] pr-1 flex-1">
             {filteredProducts.map((p) => {
-              const isLowStock = p.stock <= (p.minStock || 5);
-              const isOutOfStock = p.stock <= 0;
+              const availableStock = getAvailableStock(p);
+              const pendingFinanced = getFinancedPendingQty(p.id);
+              const isLowStock = availableStock <= (p.minStock || 5);
+              const isOutOfStock = availableStock <= 0;
               return (
                 <div
                   id={`pos-product-card-${p.barcode}`}
@@ -611,16 +699,21 @@ export default function POS({
 
                     {/* Stock tracker badge */}
                     <div className="text-right">
-                      <p className="text-[10px] text-slate-400">Stock</p>
+                      <p className="text-[9px] text-slate-400 leading-none mb-0.5">Disp. libre</p>
                       <span className={`text-xs font-bold font-mono ${
                         isOutOfStock 
-                          ? "text-red-500" 
+                          ? "text-red-500 font-extrabold" 
                           : isLowStock 
-                            ? "text-amber-500" 
+                            ? "text-amber-500 font-bold" 
                             : "text-slate-600"
                       }`}>
-                        {p.stock}
+                        {availableStock}
                       </span>
+                      {pendingFinanced > 0 && (
+                        <p className="text-[8px] text-sky-600 font-bold leading-none mt-0.5" title={`Físico: ${p.stock} | Financiado/Reservado: ${pendingFinanced}`}>
+                          ({p.stock} fís)
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -771,37 +864,92 @@ export default function POS({
             )}
           </div>
 
-          {/* DR Electronic Invoicing / NCF Configuration */}
-          <div className="px-4 py-2 border-t border-b border-slate-100 bg-slate-50/40 grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                Comprobante de Pago (NCF)
+          {/* Custom Service Fee Section */}
+          <div className="px-4 py-2 border-t border-slate-100 bg-emerald-50/10">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-[9px] font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1">
+                Cobro por Servicio (Opcional)
               </label>
-              <select
-                id="select-ncf-type"
-                value={ncfType}
-                onChange={(e) => setNcfType(e.target.value as NcfType)}
-                className="w-full text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              >
-                <option value="NINGUNO">Ninguno (Ticket básico)</option>
-                <option value="B02">Consumo Fijo (B02)</option>
-                <option value="B01">Crédito Fiscal (B01)</option>
-              </select>
+              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                <input
+                  id="chk-service-fee-included"
+                  type="checkbox"
+                  checked={isServiceFeeIncluded}
+                  onChange={(e) => setIsServiceFeeIncluded(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
+                />
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wide">
+                  Registrar como Ingreso / Sumar al Total
+                </span>
+              </label>
             </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[8px] font-medium text-slate-500 mb-0.5">Descripción del Servicio</label>
+                <input
+                  id="input-service-desc"
+                  type="text"
+                  placeholder="Ej: Mano de obra, Instalación"
+                  value={serviceDescription}
+                  onChange={(e) => setServiceDescription(e.target.value)}
+                  className="w-full text-[11px] bg-white border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder-slate-300 font-medium"
+                />
+              </div>
+              <div>
+                <label className="block text-[8px] font-medium text-slate-500 mb-0.5">Monto Cobrado (RD$)</label>
+                <input
+                  id="input-service-amount"
+                  type="number"
+                  placeholder="Ej: 500"
+                  value={serviceAmount}
+                  onChange={(e) => setServiceAmount(e.target.value)}
+                  className="w-full text-[11px] bg-white border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder-slate-300 font-mono font-bold"
+                />
+              </div>
+            </div>
+          </div>
 
-            <div>
-              <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                Comercio RNC (B01)
-              </label>
-              <input
-                id="ncf-rnc-input"
-                type="text"
-                disabled={ncfType !== "B01"}
-                value={companyRnc}
-                onChange={(e) => setCompanyRnc(e.target.value)}
-                placeholder="RNC o Cédula Cliente"
-                className="w-full text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
-              />
+          {/* DR Electronic Invoicing / NCF Configuration */}
+          <div className="px-4 py-2 border-t border-b border-slate-100 bg-slate-50/40 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Comprobante de Pago (NCF)
+                </label>
+                <select
+                  id="select-ncf-type"
+                  value={ncfType}
+                  onChange={(e) => {
+                    const val = e.target.value as NcfType;
+                    setNcfType(val);
+                    if (val === "NINGUNO") {
+                      setCompanyRnc("");
+                    }
+                  }}
+                  className="w-full text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+                >
+                  <option value="NINGUNO">Ninguno (Ticket básico)</option>
+                  <option value="B02">Consumo Fijo (B02)</option>
+                  <option value="B01">Crédito Fiscal (B01)</option>
+                  <option value="E32">Consumo Electrónico (E32 e-CF)</option>
+                  <option value="E31">Crédito Fiscal Electrónico (E31 e-CF)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  RNC o Cédula Cliente
+                </label>
+                <input
+                  id="ncf-rnc-input"
+                  type="text"
+                  disabled={ncfType === "NINGUNO"}
+                  value={companyRnc}
+                  onChange={(e) => setCompanyRnc(e.target.value)}
+                  placeholder="E.g. 101001501 o Cédula"
+                  className="w-full text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono font-bold"
+                />
+              </div>
             </div>
           </div>
 
@@ -1014,9 +1162,9 @@ export default function POS({
             {/* Submit checkout buttons */}
             <div className="space-y-2 mt-3.5">
               <button
-                id="submit-pos-checkout-print"
+                id="submit-pos-checkout-print-thermal"
                 disabled={cart.length === 0}
-                onClick={() => handleCheckoutSubmit(true)}
+                onClick={() => handleCheckoutSubmit("thermal")}
                 className={`w-full py-3 rounded-lg text-xs font-black tracking-wide uppercase transition flex items-center justify-center gap-2 cursor-pointer ${
                   cart.length === 0
                     ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50"
@@ -1025,6 +1173,20 @@ export default function POS({
               >
                 <Printer className="h-4.5 w-4.5 stroke-2 text-slate-900" />
                 Liquidar factura electrónica e imprimir tamaño botonera
+              </button>
+
+              <button
+                id="submit-pos-checkout-print-letter"
+                disabled={cart.length === 0}
+                onClick={() => handleCheckoutSubmit("letter")}
+                className={`w-full py-3 rounded-lg text-xs font-black tracking-wide uppercase transition flex items-center justify-center gap-2 cursor-pointer ${
+                  cart.length === 0
+                    ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50"
+                    : "bg-blue-600 hover:bg-blue-500 text-white hover:shadow-md active:translate-y-px duration-150"
+                }`}
+              >
+                <FileText className="h-4.5 w-4.5 stroke-2 text-white" />
+                Liquidar factura electrónica e imprimir tamaño carta (PDF grande)
               </button>
 
               <button
@@ -1072,8 +1234,10 @@ export default function POS({
       {/* Printable Receipt Modal Interface */}
       {printedInvoice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden p-5 flex flex-col items-center">
-            <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600 mb-2">
+          <div className={`bg-white rounded-xl shadow-2xl border border-slate-200 w-full overflow-hidden p-5 flex flex-col items-center transition-all duration-300 ${
+            checkoutPrintFormat === "letter" ? "max-w-2xl" : "max-w-sm"
+          }`}>
+            <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600 mb-2 animate-bounce">
               <Check className="h-6 w-6 stroke-3" />
             </div>
 
@@ -1084,104 +1248,267 @@ export default function POS({
               Ticket ID: {printedInvoice.invoiceNumber}
             </p>
 
-            {/* Thermal ticket style preview container using the pos-receipt-document ID for printing */}
-            <div id="pos-receipt-document" className="w-full bg-slate-50 border border-slate-200 p-4.5 rounded-lg font-mono text-slate-705 text-[10px] space-y-1.5 shadow-xs leading-tight max-h-[350px] overflow-y-auto">
-              
-              {bLogo && (
-                <div className="flex justify-center pb-2.5">
-                  <img src={bLogo} referrerPolicy="no-referrer" alt="Logo" className="h-10 w-auto object-contain" />
-                </div>
-              )}
+            {/* Format Selection Tab Toggle Bar */}
+            <div className="flex bg-slate-100 p-1 rounded-lg w-full mb-3 gap-1">
+              <button
+                type="button"
+                onClick={() => setCheckoutPrintFormat("thermal")}
+                className={`flex-1 py-1.5 rounded-md text-[10px] font-extrabold uppercase transition cursor-pointer text-center flex items-center justify-center gap-1.5 ${
+                  checkoutPrintFormat === "thermal"
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "text-slate-600 hover:text-slate-800 hover:bg-slate-200/60"
+                }`}
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Tíquet Botonera (80mm)
+              </button>
+              <button
+                type="button"
+                onClick={() => setCheckoutPrintFormat("letter")}
+                className={`flex-1 py-1.5 rounded-md text-[10px] font-extrabold uppercase transition cursor-pointer text-center flex items-center justify-center gap-1.5 ${
+                  checkoutPrintFormat === "letter"
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "text-slate-600 hover:text-slate-800 hover:bg-slate-200/60"
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Papel Carta (8.5x11)
+              </button>
+            </div>
 
-              <div className="text-center font-bold uppercase text-slate-800 tracking-tight">
-                *** {bName.toUpperCase()} ***
-              </div>
-              <div className="text-center text-[9px] text-slate-505 leading-normal">
-                {bAddress.toUpperCase()}<br/>
-                Tel: {bPhone} | RNC: {bRnc}<br/>
-                CF ELECTRÓNICO (DGII)<br/>
-                ----------------------------------------
-              </div>
+            {/* Dynamic preview container using the pos-receipt-document ID for printing */}
+            <div id="pos-receipt-document" className="w-full bg-slate-50 border border-slate-200 p-4 rounded-lg shadow-xs leading-tight max-h-[380px] overflow-y-auto">
+              {checkoutPrintFormat === "thermal" ? (
+                /* Thermal style preview */
+                <div className="font-mono text-slate-705 text-[10px] space-y-1.5">
+                  {bLogo && (
+                    <div className="flex justify-center pb-2.5">
+                      <img src={bLogo} referrerPolicy="no-referrer" alt="Logo" className="h-10 w-auto object-contain" />
+                    </div>
+                  )}
 
-              <div className="border-t border-dashed border-slate-300 pt-1 flex justify-between">
-                <span>Fecha:</span>
-                <span>{new Date(printedInvoice.date).toLocaleDateString()} {new Date(printedInvoice.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-              </div>
-
-              <div className="flex justify-between">
-                <span>Factura #:</span>
-                <span className="font-bold">{printedInvoice.invoiceNumber}</span>
-              </div>
-
-              {printedInvoice.ncfCode && (
-                <div className="flex justify-between bg-amber-100/40 p-1 rounded font-bold">
-                  <span>NCF Comprobante:</span>
-                  <span>{printedInvoice.ncfCode}</span>
-                </div>
-              )}
-
-              {printedInvoice.client && (
-                <div className="p-1 border border-slate-200 rounded text-[9px] mt-1 space-y-0.5">
-                  <span className="block font-bold">Cliente: {printedInvoice.client.name}</span>
-                  {printedInvoice.client.phone && <span className="block">Tel: {printedInvoice.client.phone}</span>}
-                </div>
-              )}
-
-              <div className="border-t border-dashed border-slate-300 pt-1 font-bold">
-                PROD. DETALLE
-              </div>
-
-              <div className="space-y-1">
-                {printedInvoice.items.map((item) => (
-                  <div key={item.product.id} className="flex justify-between text-[9px]">
-                    <span className="truncate max-w-[170px]">
-                      {item.quantity}x {item.product.name}
-                    </span>
-                    <span>RD${(item.product.price * item.quantity).toFixed(0)}</span>
+                  <div className="text-center font-bold uppercase text-slate-800 tracking-tight">
+                    *** {bName.toUpperCase()} ***
                   </div>
-                ))}
-              </div>
+                  <div className="text-center text-[9px] text-slate-505 leading-normal">
+                    {bAddress.toUpperCase()}<br/>
+                    Tel: {bPhone} | RNC: {bRnc}<br/>
+                    CF ELECTRÓNICO (DGII)<br/>
+                    ----------------------------------------
+                  </div>
 
-              <div className="border-t border-dashed border-slate-300 pt-1 space-y-0.5 text-right font-semibold">
-                <div className="flex justify-between">
-                  <span>Subtotal:</span>
-                  <span>RD${printedInvoice.subtotal.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-500">
-                  <span>ITBIS (18.0%):</span>
-                  <span>RD${printedInvoice.itbis.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-[11px] font-bold text-slate-800">
-                  <span>TOTAL RD$:</span>
-                  <span>RD${printedInvoice.total.toFixed(2)}</span>
-                </div>
-              </div>
+                  <div className="border-t border-dashed border-slate-300 pt-1 flex justify-between">
+                    <span>Fecha:</span>
+                    <span>{new Date(printedInvoice.date).toLocaleDateString()} {new Date(printedInvoice.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                  </div>
 
-              <div className="border-t border-dashed border-slate-300 pt-1 flex justify-between uppercase font-bold text-slate-800 text-[9px]">
-                <span>Pago: {printedInvoice.paymentMethod}</span>
-                {printedInvoice.receivedAmount !== undefined && (
-                  <span>Recibido: RD${printedInvoice.receivedAmount}</span>
-                )}
-              </div>
+                  <div className="flex justify-between">
+                    <span>Factura #:</span>
+                    <span className="font-bold">{printedInvoice.invoiceNumber}</span>
+                  </div>
 
-              {printedInvoice.changeAmount !== undefined && (
-                <div className="flex justify-between text-[9px] font-bold">
-                  <span>Devuelto (Cambio):</span>
-                  <span>RD${printedInvoice.changeAmount.toFixed(0)}</span>
+                  {printedInvoice.serviceFeeAmount && (
+                    <div className="my-1 p-1 border border-emerald-250 bg-emerald-50/20 rounded text-[9px] text-emerald-800">
+                      <span className="block font-bold uppercase tracking-wider text-[8px] text-emerald-650 mb-0.5">
+                        {printedInvoice.isServiceFeeReal ? "Cobro por Servicio (Registrado)" : "Monto por Servicio (Incluido)"}
+                      </span>
+                      <div className="flex justify-between font-bold font-mono">
+                        <span className="truncate max-w-[170px]">{printedInvoice.serviceFeeDescription}</span>
+                        <span>RD${printedInvoice.serviceFeeAmount.toFixed(0)}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {printedInvoice.ncfCode && (
+                    <div className="flex justify-between bg-amber-100/40 p-1 rounded font-bold">
+                      <span>NCF Comprobante:</span>
+                      <span>{printedInvoice.ncfCode}</span>
+                    </div>
+                  )}
+
+                  {printedInvoice.client && (
+                    <div className="p-1 border border-slate-200 rounded text-[9px] mt-1 space-y-0.5">
+                      <span className="block font-bold">Cliente: {printedInvoice.client.name}</span>
+                      {printedInvoice.client.phone && <span className="block">Tel: {printedInvoice.client.phone}</span>}
+                    </div>
+                  )}
+
+                  <div className="border-t border-dashed border-slate-300 pt-1 font-bold">
+                    PROD. DETALLE
+                  </div>
+
+                  <div className="space-y-1">
+                    {printedInvoice.items.map((item) => (
+                      <div key={item.product.id} className="flex justify-between text-[9px]">
+                        <span className="truncate max-w-[170px]">
+                          {item.quantity}x {item.product.name}
+                        </span>
+                        <span>RD${(item.product.price * item.quantity).toFixed(0)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="border-t border-dashed border-slate-300 pt-1 space-y-0.5 text-right font-semibold">
+                    <div className="flex justify-between">
+                      <span>Subtotal:</span>
+                      <span>RD${printedInvoice.subtotal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>ITBIS (18.0%):</span>
+                      <span>RD${printedInvoice.itbis.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-[11px] font-bold text-slate-800">
+                      <span>TOTAL RD$:</span>
+                      <span>RD${printedInvoice.total.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-dashed border-slate-300 pt-1 flex justify-between uppercase font-bold text-slate-800 text-[9px]">
+                    <span>Pago: {printedInvoice.paymentMethod}</span>
+                    {printedInvoice.receivedAmount !== undefined && (
+                      <span>Recibido: RD${printedInvoice.receivedAmount}</span>
+                    )}
+                  </div>
+
+                  {printedInvoice.changeAmount !== undefined && (
+                    <div className="flex justify-between text-[9px] font-bold">
+                      <span>Devuelto (Cambio):</span>
+                      <span>RD${printedInvoice.changeAmount.toFixed(0)}</span>
+                    </div>
+                  )}
+
+                  {printedInvoice.note && (
+                    <div className="border-t border-dashed border-slate-300 pt-1.5 text-[8.5px] text-slate-600 bg-slate-100/55 p-1 rounded">
+                      <span className="font-bold block uppercase text-[8px] text-slate-500 mb-0.5">Nota o Detalle de Venta:</span>
+                      <p className="font-sans leading-relaxed text-slate-705 not-italic">{printedInvoice.note}</p>
+                    </div>
+                  )}
+
+                  <div className="text-center text-[8px] text-slate-400 pt-2 border-t border-dashed border-slate-200 uppercase tracking-widest">
+                    ¡Gracias por su compra!<br/>
+                    Facturación certificada por DGII
+                  </div>
+                </div>
+              ) : (
+                /* Paper letter style preview */
+                <div className="bg-white p-5 border border-slate-200 font-sans text-slate-800 space-y-4 text-[10px] leading-relaxed rounded">
+                  <div className="flex justify-between items-start border-b border-slate-200 pb-2.5">
+                    <div className="flex gap-2.5 items-start">
+                      {bLogo && (
+                        <img src={bLogo} referrerPolicy="no-referrer" alt="Logo de Factura" className="h-9 w-auto object-contain bg-white p-0.5 border border-slate-200 rounded" />
+                      )}
+                      <div>
+                        <h4 className="text-[11px] font-black uppercase text-emerald-750">{bName.toUpperCase()}</h4>
+                        <p className="text-[8.5px] text-slate-500 font-bold leading-normal uppercase">
+                          Dirección: {bAddress.toUpperCase()}<br/>
+                          RNC: {bRnc} | Tel: {bPhone}<br/>
+                          CF ELECTRÓNICO (DGII DOMINICANA)
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-extrabold text-[8.5px] bg-slate-900 text-white px-1.5 py-0.5 rounded uppercase">Factura de Crédito Fiscal</span>
+                      <div className="text-[8.5px] text-slate-650 mt-1 font-mono leading-tight">
+                        <b>No. Factura:</b> {printedInvoice.invoiceNumber}<br/>
+                        <b>NCF DGII:</b> <b className="text-emerald-700">{printedInvoice.ncfCode || "No aplica / Registro"}</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 bg-slate-50 p-2 rounded border border-slate-150">
+                    <div>
+                      <span className="text-[7.5px] font-bold uppercase text-slate-400 block tracking-tight mb-0.5">Datos Del Adquiriente</span>
+                      <b className="text-slate-800 text-[9px] block">{printedInvoice.client ? printedInvoice.client.name.toUpperCase() : "CLIENTE GENERICO (AL CONTADO)"}</b>
+                      {printedInvoice.client && (
+                        <div className="text-[8px] text-slate-500 mt-0.5 space-y-0.2">
+                          <p>Celular: {printedInvoice.client.phone || "No especificado"}</p>
+                          <p>RNC/Cédula: {printedInvoice.client.rnc || "No especificado"}</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[7.5px] font-bold uppercase text-slate-400 block tracking-tight mb-0.5">Detalles del Documento</span>
+                      <p className="font-mono text-[8.5px]"><b>Emisión:</b> {new Date(printedInvoice.date).toLocaleDateString()}</p>
+                      <p className="font-mono text-[8.5px]"><b>Forma de Pago:</b> {printedInvoice.paymentMethod}</p>
+                      <p className="font-mono text-[8.5px]"><b>Moneda:</b> DOP</p>
+                    </div>
+                  </div>
+
+                  {/* Table details */}
+                  <table className="w-full text-left text-[9px] border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 border-b border-slate-200">
+                        <th className="py-1 px-1.5 font-bold">Código</th>
+                        <th className="py-1 px-1.5 font-bold">Descripción</th>
+                        <th className="py-1 px-1.5 font-bold text-center">Cant.</th>
+                        <th className="py-1 px-1.5 font-bold text-right">Precio</th>
+                        <th className="py-1 px-1.5 font-bold text-right">ITBIS</th>
+                        <th className="py-1 px-1.5 font-bold text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-150">
+                      {printedInvoice.items.map((item) => {
+                        const basePrice = item.product.price;
+                        const itbisRate = item.product.itbisRate || 0;
+                        const lineItbis = basePrice * (itbisRate / 100);
+                        const itemSubtotal = basePrice * item.quantity;
+                        const itemItbisTotal = lineItbis * item.quantity;
+                        const itemTotal = itemSubtotal + itemItbisTotal;
+                        return (
+                          <tr key={item.product.id}>
+                            <td className="py-1 px-1.5 font-mono text-[8px] text-slate-500">{item.product.barcode || "N/A"}</td>
+                            <td className="py-1 px-1.5 font-medium text-slate-900">{item.product.name}</td>
+                            <td className="py-1 px-1.5 text-center font-bold">{item.quantity}</td>
+                            <td className="py-1 px-1.5 text-right font-mono">RD${basePrice.toFixed(2)}</td>
+                            <td className="py-1 px-1.5 text-right font-mono">RD${itemItbisTotal.toFixed(2)}</td>
+                            <td className="py-1 px-1.5 text-right font-mono font-extrabold text-blue-900">RD${itemTotal.toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+
+                  {/* Totals and service box */}
+                  <div className="flex justify-between items-start pt-1.5 border-t border-slate-200">
+                    <div>
+                      {printedInvoice.serviceFeeAmount && (
+                        <div className="max-w-xs p-1.5 border border-emerald-200 bg-emerald-50/25 rounded text-[8.5px] text-emerald-800">
+                          <span className="block font-bold uppercase tracking-wider text-[7px] text-emerald-600 mb-0.5">
+                            {printedInvoice.isServiceFeeReal ? "Cobro por Servicio (Registrado)" : "Monto por Servicio (Incluido)"}
+                          </span>
+                          <p className="font-semibold text-slate-800">Servicio: {printedInvoice.serviceFeeDescription}</p>
+                          <p className="font-mono font-bold text-emerald-700">Valor: RD$ {printedInvoice.serviceFeeAmount.toFixed(2)}</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="w-48 space-y-0.5 text-right font-mono text-[9px]">
+                      <div className="flex justify-between text-slate-500">
+                        <span>Total Neto:</span>
+                        <span>RD$ {printedInvoice.subtotal.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-550">
+                        <span>ITBIS Liquidado:</span>
+                        <span>RD$ {printedInvoice.itbis.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] font-black text-rose-700 bg-rose-50/40 p-0.5 rounded">
+                        <span>Total Factura:</span>
+                        <span>RD$ {printedInvoice.total.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {printedInvoice.note && (
+                    <div className="bg-slate-50 border border-slate-150 p-2 rounded text-[8.5px] text-slate-705 text-left">
+                      <span className="font-bold block uppercase text-[7.5px] text-slate-500 mb-0.5">Nota o Detalle de Facturación:</span>
+                      <p className="text-slate-800 leading-relaxed font-sans">{printedInvoice.note}</p>
+                    </div>
+                  )}
+
+                  <div className="text-center text-[7.5px] text-slate-400 pt-2 border-t border-dashed border-slate-200 uppercase tracking-wider">
+                    *** GRACIAS POR PREFERIRNOS ***
+                  </div>
                 </div>
               )}
-
-              {printedInvoice.note && (
-                <div className="border-t border-dashed border-slate-300 pt-1.5 text-[8.5px] text-slate-600 bg-slate-100/55 p-1 rounded">
-                  <span className="font-bold block uppercase text-[8px] text-slate-500 mb-0.5">Nota o Detalle de Venta:</span>
-                  <p className="font-sans leading-relaxed text-slate-705 not-italic">{printedInvoice.note}</p>
-                </div>
-              )}
-
-              <div className="text-center text-[8px] text-slate-400 pt-2 border-t border-dashed border-slate-200 uppercase tracking-widest">
-                ¡Gracias por su compra!<br/>
-                Facturación certificada por DGII
-              </div>
             </div>
 
             {/* Print, View PDF and WhatsApp Actions Suite */}
@@ -1199,7 +1526,7 @@ export default function POS({
                 <button
                   id="btn-pos-receipt-pdf"
                   onClick={handleViewPdf}
-                  className="flex items-center justify-center gap-1 py-1.5 bg-slate-100 text-slate-705 hover:bg-slate-200 rounded-lg font-bold text-[10px] transition cursor-pointer"
+                  className="flex items-center justify-center gap-1 py-1.5 bg-slate-100 text-slate-750 hover:bg-slate-200 rounded-lg font-bold text-[10px] transition cursor-pointer"
                 >
                   <FileText className="h-3.5 w-3.5" />
                   Ver Factura PDF
@@ -1213,20 +1540,20 @@ export default function POS({
                       if (!printElement) return;
 
                       // Open a popup window for printing to bypass standard sandbox print constraints
-                      const printWindow = window.open("", "_blank", "width=400,height=600");
+                      const printWindow = window.open("", "_blank", "width=600,height=800");
                       if (printWindow) {
                         printWindow.document.write(`
                           <html>
                             <head>
-                              <title>Imprimir Tíquet - Nova Facturación</title>
+                              <title>Imprimir Factura</title>
                               <style>
                                 @page {
-                                  size: 80mm auto;
-                                  margin: 0;
+                                  size: ${checkoutPrintFormat === "thermal" ? "80mm auto" : "letter"};
+                                  margin: ${checkoutPrintFormat === "thermal" ? "0" : "15mm"};
                                 }
                                 body {
                                   margin: 0;
-                                  padding: 4mm;
+                                  padding: ${checkoutPrintFormat === "thermal" ? "4mm" : "0"};
                                   background: white !important;
                                   color: black !important;
                                   -webkit-print-color-adjust: exact;
@@ -1238,7 +1565,7 @@ export default function POS({
                                 }
                               </style>
                             </head>
-                            <body class="p-4 bg-white text-black font-mono">
+                            <body class="p-4 bg-white text-black">
                               <div id="print-content" class="w-full text-xs p-0 m-0 bg-white"></div>
                             </body>
                           </html>
@@ -1275,7 +1602,7 @@ export default function POS({
                   className="flex items-center justify-center gap-1 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-bold text-[10px] transition cursor-pointer"
                 >
                   <Printer className="h-3.5 w-3.5" />
-                  Imprimir Tíquet
+                  {checkoutPrintFormat === "thermal" ? "Imprimir Tíquet" : "Imprimir Carta"}
                 </button>
               </div>
 
@@ -1294,7 +1621,7 @@ export default function POS({
               </button>
             </div>
             <p className="text-[9px] text-slate-400 mt-2.5 text-center">
-              * El sistema genera facturas oficiales en formato PDF y las enlaza directamente con los dispositivos.
+              * El sistema genera facturas oficiales en formato PDF y las enlaza directamente con los de la DGII.
             </p>
           </div>
         </div>

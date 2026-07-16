@@ -211,7 +211,10 @@ export const INITIAL_CLIENTS: Client[] = [
 // Standard paper/electronic invoice series start with:
 // B01: Crédito Fiscal (business expense deductibles)
 // B02: Consumo (standard retail customers)
-export function generateNcfCode(type: "B01" | "B02", currentCount: number): string {
-  const paddedCount = String(currentCount).padStart(8, "0");
+export function generateNcfCode(type: "B01" | "B02" | "E31" | "E32" | "NINGUNO", currentCount: number): string {
+  if (type === "NINGUNO") return "";
+  const isElectronic = type.startsWith("E");
+  const paddingLength = isElectronic ? 10 : 8;
+  const paddedCount = String(currentCount).padStart(paddingLength, "0");
   return `${type}${paddedCount}`;
 }

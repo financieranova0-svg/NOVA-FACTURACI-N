@@ -1,17 +1,38 @@
 import { useState, FormEvent } from "react";
 import { Plus, Search, Table, Grid, RotateCcw, PenTool, Check, AlertTriangle, RefreshCw, Trash2, FileText, Send, ShieldAlert, CheckCircle2 } from "lucide-react";
-import { Product } from "../types";
+import { Product, CustomReceipt } from "../types";
 import { INITIAL_CATEGORIES } from "../data";
 import { getBusinessConfig, generateInventoryCatalogPDF } from "../utils/pdfGenerator";
 
 interface InventoryProps {
   products: Product[];
+  receiptsList?: CustomReceipt[];
   onAddProduct: (product: Product) => void;
   onUpdateFullProductList: (updatedProducts: Product[]) => void;
   onDeleteProduct: (productId: string) => void;
 }
 
-export default function Inventory({ products, onAddProduct, onUpdateFullProductList, onDeleteProduct }: InventoryProps) {
+export default function Inventory({ products, receiptsList = [], onAddProduct, onUpdateFullProductList, onDeleteProduct }: InventoryProps) {
+  // Calculate Pending Financed Stock (Stock Financiado Pendiente) for a product
+  const getFinancedPendingQty = (productId: string) => {
+    return receiptsList.reduce((acc, r) => {
+      // Must be active financing
+      if (r.type === "inicio" && r.status !== "Finalizado") {
+        // 1. If it has explicit itemized financedItems
+        if (r.financedItems && r.financedItems.length > 0) {
+          const matchedItem = r.financedItems.find(it => it.productId === productId);
+          if (matchedItem) {
+            return acc + (matchedItem.quantity || 0);
+          }
+        } else if (r.productId === productId) {
+          // 2. Fallback to root productId
+          return acc + (r.productQty || 0);
+        }
+      }
+      return acc;
+    }, 0);
+  };
+
   // New product form states
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
@@ -22,6 +43,7 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
   const [category, setCategory] = useState(INITIAL_CATEGORIES[0]);
   const [itbisRate, setItbisRate] = useState<0 | 8 | 16 | 18>(0);
   const [minStock, setMinStock] = useState("5");
+  const [financingPrice, setFinancingPrice] = useState("");
 
   // Search filter
   const [searchQuery, setSearchQuery] = useState("");
@@ -118,6 +140,7 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
 
     const priceNum = parseFloat(price);
     const costPriceNum = parseFloat(costPrice) || 0;
+    const financingPriceNum = financingPrice.trim() !== "" ? parseFloat(financingPrice) : undefined;
 
     const newProduct: Product = {
       id: `prod-${Date.now()}`,
@@ -128,7 +151,8 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
       barcode: barcode.trim(),
       category,
       itbisRate,
-      minStock: parseInt(minStock, 10) || 5
+      minStock: parseInt(minStock, 10) || 5,
+      financingPrice: financingPriceNum !== undefined && !isNaN(financingPriceNum) ? financingPriceNum : undefined
     };
 
     onAddProduct(newProduct);
@@ -142,6 +166,7 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
     setCategory(INITIAL_CATEGORIES[0]);
     setItbisRate(0);
     setMinStock("5");
+    setFinancingPrice("");
     setShowForm(false);
   };
 
@@ -327,6 +352,19 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
           </div>
 
           <div>
+            <label className="block text-xs font-bold text-indigo-700 mb-1">Precio al Financiar (Opcional)</label>
+            <input
+              id="new-product-financing-price"
+              type="number"
+              step="0.01"
+              value={financingPrice}
+              onChange={(e) => setFinancingPrice(e.target.value)}
+              placeholder="Ej: 45000.00"
+              className="w-full text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-indigo-900 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div>
             <label className="block text-xs font-bold text-slate-600 mb-1">Stock de Inicio (Cantidad física)</label>
             <input
               id="new-product-stock"
@@ -436,6 +474,7 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
                 <th className="py-3 px-4 font-bold">ITBIS</th>
                 <th className="py-3 px-4 font-bold text-center">Defensa (Min)</th>
                 <th className="py-3 px-4 font-bold text-center">Stock Físico</th>
+                <th className="py-3 px-4 font-bold text-center">Stock Financiado Pendiente</th>
                 <th className="py-3 px-4 font-bold text-right">Operaciones</th>
               </tr>
             </thead>
@@ -468,7 +507,12 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
                       RD${evaluatedCost.toFixed(2)}
                     </td>
                     <td className="py-2.5 px-4 text-right font-bold text-emerald-700 font-mono">
-                      RD${p.price.toFixed(2)}
+                      <div>RD${p.price.toFixed(2)}</div>
+                      {p.financingPrice !== undefined && p.financingPrice > 0 && (
+                        <div className="text-[10px] text-indigo-600 font-bold mt-0.5" title="Precio especial al financiar">
+                          Fin: RD${p.financingPrice.toLocaleString("es-DO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2.5 px-4">
                       <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
@@ -514,6 +558,19 @@ export default function Inventory({ products, onAddProduct, onUpdateFullProductL
                           )}
                         </div>
                       )}
+                    </td>
+                    <td className="py-2.5 px-4 text-center">
+                      {(() => {
+                        const financedPending = getFinancedPendingQty(p.id);
+                        return financedPending > 0 ? (
+                          <span className="font-mono font-black text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200 shadow-xs inline-flex items-center justify-center gap-1 mx-auto" title="Unidades activamente financiadas pendientes de pago completo">
+                            <span className="h-1.5 w-1.5 bg-blue-500 rounded-full animate-pulse"></span>
+                            {financedPending} unds
+                          </span>
+                        ) : (
+                          <span className="font-mono text-slate-350 font-medium">-</span>
+                        );
+                      })()}
                     </td>
                     <td className="py-2.5 px-4 text-right">
                       {editingProductId === p.id ? (

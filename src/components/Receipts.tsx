@@ -7,6 +7,7 @@ import {
   Search, 
   Trash2, 
   Plus, 
+  Minus, 
   Check, 
   Sparkles, 
   ChevronRight, 
@@ -21,9 +22,10 @@ import {
   Clock,
   Briefcase,
   Camera,
-  ShieldAlert
+  ShieldAlert,
+  Settings
 } from "lucide-react";
-import { Client, Product, AppUser, CustomReceipt } from "../types";
+import { Client, Product, AppUser, CustomReceipt, Sale } from "../types";
 import { getBusinessConfig, BusinessConfig, generateReceiptsListPDF } from "../utils/pdfGenerator";
 import { jsPDF } from "jspdf";
 
@@ -33,9 +35,11 @@ interface ReceiptsProps {
   products: Product[];
   receiptsList: CustomReceipt[];
   onSaveReceipts: (updated: CustomReceipt[]) => void;
+  onUpdateStock?: (productId: string, quantityToDeduct: number) => void;
+  onAddSale?: (newSale: Sale) => void;
 }
 
-export default function Receipts({ currentUser, clients, products, receiptsList, onSaveReceipts }: ReceiptsProps) {
+export default function Receipts({ currentUser, clients, products, receiptsList, onSaveReceipts, onUpdateStock, onAddSale }: ReceiptsProps) {
   const getOperatingEmailLocal = (email: string) => {
     const clean = String(email || "").trim().toLowerCase();
     if (clean === "marialuzgonzalez1234568@gmail.com") {
@@ -45,17 +49,39 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
   };
   const userEmail = currentUser ? getOperatingEmailLocal(currentUser.email) : "default";
   
+  // Calculate Pending Financed Stock (Stock Financiado Pendiente) for a product
+  const getFinancedPendingQty = (productId: string) => {
+    return (receiptsList || []).reduce((acc, r) => {
+      // Must be active financing
+      if (r.type === "inicio" && r.status !== "Finalizado") {
+        // 1. If it has explicit itemized financedItems
+        if (r.financedItems && r.financedItems.length > 0) {
+          const matchedItem = r.financedItems.find(it => it.productId === productId);
+          if (matchedItem) {
+            return acc + (matchedItem.quantity || 0);
+          }
+        } else if (r.productId === productId) {
+          // 2. Fallback to root productId
+          return acc + (r.productQty || 0);
+        }
+      }
+      return acc;
+    }, 0);
+  };
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   
   // Custom non-blocking alert to replace system freezing window.alerts
   const [customAlert, setCustomAlert] = useState<{ title: string; message: string; type: "error" | "success" | "warning" } | null>(null);
+  const [deleteReceiptId, setDeleteReceiptId] = useState<string | null>(null);
   
   // Active receipt editor type
   const [receiptType, setReceiptType] = useState<"cuota" | "completo" | "inicio">("cuota");
   
   // Origin preference
   const [isProductManual, setIsProductManual] = useState(false);
+  const [selectedProductId, setSelectedProductId] = useState("");
 
   // Form fields
   const [clientName, setClientName] = useState("");
@@ -70,6 +96,15 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
   const [productQty, setProductQty] = useState(1);
   const [totalAmount, setTotalAmount] = useState<number>(0);
   const [hasItbis, setHasItbis] = useState(false);
+  
+  const [unitPrice, setUnitPrice] = useState<number>(0);
+  const [financedItems, setFinancedItems] = useState<{
+    id: string;
+    name: string;
+    price: number;
+    quantity: number;
+    productId?: string;
+  }[]>([]);
   
   // Type 1 special:
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -92,18 +127,114 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
     }
   }, [totalAmount]);
 
+  // Helper to get previous cuota payments robustly
+  const getPreviousCuotasForContract = (contractInvoice: string, clientNameStr: string, productDesc: string) => {
+    const trimmedInvoice = contractInvoice ? contractInvoice.trim().toLowerCase() : "";
+    const trimmedClient = clientNameStr ? clientNameStr.trim().toLowerCase() : "";
+    const trimmedProduct = productDesc ? productDesc.trim().toLowerCase() : "";
+
+    return receiptsList.filter(r => {
+      if (r.type !== "cuota") return false;
+
+      const rInvoice = (r.invoiceNumber || r.receiptNumber || "").trim().toLowerCase();
+      const rClient = (r.clientName || "").trim().toLowerCase();
+      const rProduct = (r.productDescription || "").trim().toLowerCase();
+
+      // Check if it's the same client
+      const isSameClient = trimmedClient && rClient && (rClient === trimmedClient);
+      if (!isSameClient) return false;
+
+      // Condition 1: Invoice / Contract number matches (primary and strict!)
+      if (trimmedInvoice && rInvoice && (rInvoice === trimmedInvoice)) {
+        return true;
+      }
+
+      // Condition 2: Fallback to product description matches ONLY if we don't have contract numbers to compare
+      if (!trimmedInvoice || !rInvoice) {
+        if (trimmedProduct && rProduct && (rProduct === trimmedProduct)) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+  };
+
+  // Self-healing data migration to fix legacy mismatched invoice numbers on cuota receipts
+  useEffect(() => {
+    if (receiptsList && receiptsList.length > 0) {
+      const inicioContracts = receiptsList.filter(r => r.type === "inicio");
+      let hasChanges = false;
+      const healed = receiptsList.map(r => {
+        if (r.type !== "cuota") return r;
+
+        const rClient = (r.clientName || "").trim().toLowerCase();
+        const rProduct = (r.productDescription || "").trim().toLowerCase();
+
+        const matchingContract = inicioContracts.find(c => {
+          const cClient = (c.clientName || "").trim().toLowerCase();
+          const cProduct = (c.productDescription || "").trim().toLowerCase();
+          return cClient && rClient && (cClient === rClient) && cProduct && rProduct && (cProduct === rProduct);
+        });
+
+        if (matchingContract) {
+          const contractInvoice = (matchingContract.receiptNumber || matchingContract.invoiceNumber || "").trim();
+          if (contractInvoice && r.invoiceNumber !== contractInvoice) {
+            hasChanges = true;
+            return {
+              ...r,
+              invoiceNumber: contractInvoice,
+              receiptNumber: r.receiptNumber === r.invoiceNumber ? contractInvoice : r.receiptNumber
+            };
+          }
+        }
+        return r;
+      });
+
+      if (hasChanges) {
+        onSaveReceipts(healed);
+      }
+    }
+  }, [receiptsList, onSaveReceipts]);
+
   // Handle automatic calculations for Cuota payment section
   useEffect(() => {
     const total = Number(montoTotalDeuda) || 0;
     const initialDown = Number(abonoInicialDeuda) || 0;
     const currentAbono = Number(abonoCuotas) || 0;
 
-    const calculatedTotalPagado = initialDown + currentAbono;
-    const calculatedDeudaRestante = total - calculatedTotalPagado;
+    const previousCuotaReceipts = getPreviousCuotasForContract(invoiceNumber, clientName, productDescription);
+    const prevAbonosSum = previousCuotaReceipts.reduce((sum, r) => sum + (r.abonoCuotas || 0), 0);
+
+    const calculatedTotalPagado = initialDown + prevAbonosSum + currentAbono;
+    const calculatedDeudaRestante = Math.max(0, total - calculatedTotalPagado);
 
     setTotalPagado(calculatedTotalPagado);
     setTotalRestante(calculatedDeudaRestante);
-  }, [montoTotalDeuda, abonoInicialDeuda, abonoCuotas]);
+
+    // Also auto-calculate cuotasPagadas string
+    const N = previousCuotaReceipts.length;
+    const origFinancing = receiptsList.find(r => {
+      if (r.type !== "inicio") return false;
+      const rInvoice = (r.receiptNumber || r.invoiceNumber || "").trim().toLowerCase();
+      const rClient = (r.clientName || "").trim().toLowerCase();
+      const rProduct = (r.productDescription || "").trim().toLowerCase();
+
+      const isSameClient = clientName && rClient && (rClient === clientName.trim().toLowerCase());
+      if (!isSameClient) return false;
+
+      const trimmedInvoice = invoiceNumber ? invoiceNumber.trim().toLowerCase() : "";
+      if (trimmedInvoice && rInvoice && (rInvoice === trimmedInvoice)) return true;
+
+      const trimmedProduct = productDescription ? productDescription.trim().toLowerCase() : "";
+      if (trimmedProduct && rProduct && (rProduct === trimmedProduct)) return true;
+
+      return false;
+    });
+
+    const totalCuotasNum = origFinancing?.cantidadCuotas || 8;
+    setCuotasPagadas(`${N + 1}/${totalCuotasNum}`);
+  }, [montoTotalDeuda, abonoInicialDeuda, abonoCuotas, invoiceNumber, clientName, productDescription, receiptsList]);
   
   // Type 3 special:
   const [montoInicial, setMontoInicial] = useState<number>(0);
@@ -114,14 +245,37 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
   const [fiadorCedula, setFiadorCedula] = useState("");
   const [garantia, setGarantia] = useState("2 años de garantía. La garantía no cubre daño eléctrico y por faltar de mantenimiento.");
 
+  const [isHeaderSettingsOpen, setIsHeaderSettingsOpen] = useState(false);
+  const [businessName, setBusinessName] = useState("");
+
   const businessConfig = getBusinessConfig(userEmail);
   const [logo, setLogo] = useState(businessConfig.logo || "");
 
-  // Update logo if user config changes
+  // Update business details if user config changes or on mount
   useEffect(() => {
     const config = getBusinessConfig(userEmail);
     setLogo(config.logo || "");
+    setBusinessName(config.name || "NOVA FACTURACIÓN S.R.L");
+    setDireccion(config.address || "Av. Respaldo los Mártires esq. Máximo Gómez # 11");
+    setRnc(config.rnc || "RNC EN USO");
+    setPhone2(config.phone || "829-879-5652");
   }, [userEmail]);
+
+  const handleUpdateBusinessConfig = (key: keyof BusinessConfig, value: string) => {
+    if (key === "name") {
+      setBusinessName(value);
+    } else if (key === "address") {
+      setDireccion(value);
+    } else if (key === "rnc") {
+      setRnc(value);
+    } else if (key === "phone") {
+      setPhone2(value);
+    }
+
+    const currentConfig = getBusinessConfig(userEmail);
+    const updatedConfig = { ...currentConfig, [key]: value };
+    localStorage.setItem(`nova_business_config_${userEmail}`, JSON.stringify(updatedConfig));
+  };
 
   const handleLogoChange = (base64Str: string) => {
     setLogo(base64Str);
@@ -163,26 +317,257 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
     }
   };
 
+  // Helper to load an active financing for a client
+  const handleSelectActiveFinancing = (financingId: string) => {
+    if (!financingId) {
+      // Clear fields
+      setClientName("");
+      setClientCedula("");
+      setPhone("");
+      setProductDescription("");
+      setInvoiceNumber("");
+      setMontoTotalDeuda(0);
+      setAbonoInicialDeuda(0);
+      setAbonoCuotas(0);
+      setProximoPagoMonto(0);
+      setSelectedProductId("");
+      setIsProductManual(true);
+      return;
+    }
+
+    const f = receiptsList.find(r => r.id === financingId);
+    if (f) {
+      setClientName(f.clientName);
+      setClientCedula(f.clientCedula);
+      setPhone(f.phone);
+      setProductDescription(f.productDescription);
+      setInvoiceNumber(f.receiptNumber || f.invoiceNumber || "");
+      setMontoTotalDeuda(f.totalAmount);
+      setTotalAmount(f.totalAmount); // Ensure totalAmount matches the contract total
+      setAbonoInicialDeuda(f.montoInicial || 0);
+      setMontoInicial(f.montoInicial || 0); // Ensure montoInicial matches
+      setMontoPorCuota(f.montoPorCuota || 0);
+      
+      if (f.productId) {
+        setSelectedProductId(f.productId);
+        setIsProductManual(false);
+      } else {
+        setSelectedProductId("");
+        setIsProductManual(true);
+      }
+
+      if (f.frecuenciaPago) setFrecuenciaPago(f.frecuenciaPago);
+      if (f.cantidadCuotas) setCantidadCuotas(f.cantidadCuotas);
+
+      // Pre-fill standard installment amount
+      const installmentAmount = f.montoPorCuota || 0;
+      setAbonoCuotas(installmentAmount);
+      setProximoPagoMonto(installmentAmount);
+
+      // Find previous payments of type "cuota" with same client name, invoice/receipt number or product description
+      const previousCuotaReceipts = getPreviousCuotasForContract(
+        f.receiptNumber || f.invoiceNumber || "",
+        f.clientName,
+        f.productDescription
+      );
+      const N = previousCuotaReceipts.length;
+      setCuotasPagadas(`${N + 1}/${f.cantidadCuotas || 8}`);
+    }
+  };
+
   // Set product helper
   const handleSelectProduct = (productId: string) => {
+    setSelectedProductId(productId);
     if (!productId) {
       setProductDescription("");
       setTotalAmount(0);
+      setUnitPrice(0);
       return;
     }
     const found = products.find(p => p.id === productId);
     if (found) {
+      const pendingQty = getFinancedPendingQty(found.id);
+      const availableStock = Math.max(0, found.stock - pendingQty);
+      if (availableStock <= 0) {
+        showBannerMessage(`⚠️ "${found.name}" está agotado (Físico: ${found.stock}, Financiado pendiente: ${pendingQty}).`);
+      }
       setProductDescription(found.name);
-      setTotalAmount(found.price);
+      const priceToUse = (found.financingPrice !== undefined && found.financingPrice > 0)
+        ? found.financingPrice
+        : found.price;
+      
+      setUnitPrice(priceToUse);
+      
+      // Limit initial productQty to available stock if available stock is greater than 0, otherwise 0
+      const initialQty = availableStock > 0 ? 1 : 0;
+      setProductQty(initialQty);
+      setTotalAmount(priceToUse * initialQty);
+
       // Auto-calculate logic or assist if type 3
       if (receiptType === "inicio") {
         // Simple suggestion for installment
-        const remaining = found.price - montoInicial;
+        const remaining = (priceToUse * initialQty) - montoInicial;
         const suggestion = remaining > 0 ? Math.round(remaining / cantidadCuotas) : 0;
         setMontoPorCuota(suggestion);
       }
     }
   };
+
+  // Handle manual/button updates to quantity
+  const handleUpdateQty = (newQty: number) => {
+    let qty = Math.max(1, newQty);
+
+    // Limit to stock if from inventory
+    if (!isProductManual && selectedProductId) {
+      const found = products.find(p => p.id === selectedProductId);
+      if (found) {
+        const pendingQty = getFinancedPendingQty(found.id);
+        const availableStock = Math.max(0, found.stock - pendingQty);
+        if (qty > availableStock) {
+          qty = availableStock;
+          showBannerMessage(`⚠️ No puedes agregar más de ${availableStock} unidades. (Físico: ${found.stock}, Financiado pendiente: ${pendingQty}).`);
+        }
+      }
+    }
+
+    setProductQty(qty);
+    if (unitPrice > 0) {
+      const newTotal = unitPrice * qty;
+      setTotalAmount(newTotal);
+      
+      if (receiptType === "inicio") {
+        const remaining = newTotal - montoInicial;
+        const suggestion = remaining > 0 ? Math.round(remaining / cantidadCuotas) : 0;
+        setMontoPorCuota(suggestion);
+      }
+    }
+  };
+
+  // Helper to add product to the financing list
+  const handleAddFinancedItem = () => {
+    if (!productDescription.trim()) {
+      showBannerMessage("⚠️ Por favor ingresa o selecciona un artículo válido.");
+      return;
+    }
+
+    const qtyToAdd = Math.max(1, productQty);
+
+    // If selected from inventory, check stock constraints
+    if (!isProductManual && selectedProductId) {
+      const found = products.find(p => p.id === selectedProductId);
+      if (found) {
+        const pendingQty = getFinancedPendingQty(found.id);
+        const availableStock = Math.max(0, found.stock - pendingQty);
+
+        // Calculate what has already been added in financedItems
+        const alreadyAddedQty = financedItems
+          .filter(it => it.productId === selectedProductId)
+          .reduce((sum, it) => sum + it.quantity, 0);
+
+        if (alreadyAddedQty + qtyToAdd > availableStock) {
+          showBannerMessage(`⚠️ Error: El stock disponible para "${found.name}" es de ${availableStock} unidades. (Físico: ${found.stock}, Financiado pendiente: ${pendingQty}, En lista: ${alreadyAddedQty}). No puedes exceder este límite.`);
+          return;
+        }
+      }
+    }
+
+    const newItem = {
+      id: "fitem-" + Date.now(),
+      name: productDescription.trim(),
+      price: Number(unitPrice) || Number(totalAmount) || 0,
+      quantity: qtyToAdd,
+      productId: !isProductManual ? selectedProductId : undefined
+    };
+    setFinancedItems(prev => [...prev, newItem]);
+    
+    // Clear selector fields so they can add another
+    setProductDescription("");
+    setSelectedProductId("");
+    setTotalAmount(0);
+    setProductQty(1);
+    setUnitPrice(0);
+    showBannerMessage("➕ Artículo agregado a la lista del recibo.");
+  };
+
+  // Helper to remove product from the list
+  const handleRemoveFinancedItem = (id: string) => {
+    setFinancedItems(prev => prev.filter(item => item.id !== id));
+    showBannerMessage("🗑️ Artículo eliminado de la lista.");
+  };
+
+  // Helper to change quantity of an added item
+  const handleUpdateItemQty = (id: string, delta: number) => {
+    setFinancedItems(prev => prev.map(item => {
+      if (item.id === id) {
+        const newQty = Math.max(1, item.quantity + delta);
+
+        // If it's an inventory product, enforce stock limit
+        if (item.productId) {
+          const found = products.find(p => p.id === item.productId);
+          if (found) {
+            const pendingQty = getFinancedPendingQty(found.id);
+            const availableStock = Math.max(0, found.stock - pendingQty);
+            if (newQty > availableStock) {
+              showBannerMessage(`⚠️ No puedes agregar más de ${availableStock} unidades para "${found.name}" porque ese es el stock máximo disponible.`);
+              return item; // Keep previous quantity
+            }
+          }
+        }
+        return { ...item, quantity: newQty };
+      }
+      return item;
+    }));
+  };
+
+  // Synchronize aggregated values when the list of products changes
+  useEffect(() => {
+    if (financedItems.length > 0) {
+      const desc = financedItems.map(it => `${it.quantity}x ${it.name}`).join(" + ");
+      const qty = financedItems.reduce((acc, it) => acc + it.quantity, 0);
+      const total = financedItems.reduce((acc, it) => acc + (it.price * it.quantity), 0);
+      
+      setProductDescription(desc);
+      setProductQty(qty);
+      setTotalAmount(total);
+
+      if (receiptType === "inicio") {
+        const remaining = total - montoInicial;
+        const suggestion = remaining > 0 ? Math.round(remaining / cantidadCuotas) : 0;
+        setMontoPorCuota(suggestion);
+      }
+    } else {
+      // If we are in inicio/completo and list was cleared, reset values
+      if (receiptType === "inicio" || receiptType === "completo") {
+        setProductDescription("");
+        setProductQty(1);
+        setTotalAmount(0);
+        if (receiptType === "inicio") {
+          setMontoPorCuota(0);
+        }
+      }
+    }
+  }, [financedItems, receiptType, montoInicial, cantidadCuotas]);
+
+  useEffect(() => {
+    if (!isProductManual && selectedProductId) {
+      const found = products.find(p => p.id === selectedProductId);
+      if (found) {
+        const priceToUse = (found.financingPrice !== undefined && found.financingPrice > 0)
+          ? found.financingPrice
+          : found.price;
+        setUnitPrice(priceToUse);
+        setTotalAmount(priceToUse * productQty);
+      }
+    }
+  }, [receiptType, selectedProductId, isProductManual, products, productQty]);
+
+  // Auto-generate invoice/contract number when empty to guarantee it's always filled
+  useEffect(() => {
+    if (!invoiceNumber) {
+      const generated = "2ID-" + Math.floor(100000 + Math.random() * 900000);
+      setInvoiceNumber(generated);
+    }
+  }, [receiptType, invoiceNumber]);
 
   // Auto-fill test demo data for fast use
   const handleAutoFillDemo = () => {
@@ -306,9 +691,10 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
       phone2: phone2.trim(),
       rnc: rnc.trim(),
       direccion: direccion.trim(),
+      businessName: businessName.trim() || businessConfig.name,
       productDescription: productDescription.trim() || "SERVICIOS DE FINANCIAMIENTO",
       productQty: productQty,
-      totalAmount: totalAmount,
+      totalAmount: receiptType === "cuota" ? (montoTotalDeuda || totalAmount) : totalAmount,
       hasItbis: hasItbis,
       invoiceNumber: invoiceNumber.trim() || receiptNumber,
       abonoCuotas: abonoCuotas,
@@ -318,36 +704,160 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
       proximoPagoFecha: proximoPagoFecha,
       cuotasPagadas: cuotasPagadas,
       cuotasAtrasadas: cuotasAtrasadas,
-      montoInicial: montoInicial,
+      montoInicial: receiptType === "cuota" ? (abonoInicialDeuda || montoInicial) : montoInicial,
       cantidadCuotas: cantidadCuotas,
       frecuenciaPago: frecuenciaPago,
-      montoPorCuota: montoPorCuota,
+      montoPorCuota: receiptType === "cuota" ? (montoPorCuota || 0) : montoPorCuota,
       fiadorNombre: fiadorNombre.trim(),
       fiadorCedula: fiadorCedula.trim(),
-      garantia: garantia
+      garantia: garantia,
+      status: receiptType === "inicio" ? "Activo" : (receiptType === "completo" ? "Finalizado" : undefined),
+      productId: !isProductManual && selectedProductId ? selectedProductId : undefined,
+      financedItems: receiptType === "inicio" ? financedItems : undefined
     };
 
-    const updated = [newRec, ...receiptsList];
+    let finalReceiptsList = [...receiptsList];
+
+    // Handle contract completion, stock deduction, and sales logging
+    if (receiptType === "cuota" || receiptType === "completo") {
+      const total = Number(montoTotalDeuda) || 0;
+      const initialDown = Number(abonoInicialDeuda) || 0;
+      const currentAbono = receiptType === "cuota" ? Number(abonoCuotas) : Number(totalAmount);
+
+      const previousCuotaReceipts = getPreviousCuotasForContract(invoiceNumber, clientName, productDescription);
+      const prevAbonosSum = previousCuotaReceipts.reduce((sum, r) => sum + (r.abonoCuotas || 0), 0);
+
+      const calculatedDeudaRestante = Math.max(0, total - (initialDown + prevAbonosSum + currentAbono));
+      const isFinishingNow = calculatedDeudaRestante <= 1 || receiptType === "completo";
+
+      if (isFinishingNow) {
+        // Find matching active financing for this client
+        const originalInicio = receiptsList.find(r => 
+          r.type === "inicio" && 
+          r.status !== "Finalizado" &&
+          (r.receiptNumber === invoiceNumber || r.invoiceNumber === invoiceNumber)
+        );
+
+        if (originalInicio) {
+          // Deduct quantity of all products in this contract from physical inventory
+          if (originalInicio.financedItems && originalInicio.financedItems.length > 0) {
+            originalInicio.financedItems.forEach(item => {
+              if (item.productId && onUpdateStock) {
+                onUpdateStock(item.productId, item.quantity);
+              }
+            });
+          } else if (originalInicio.productId) {
+            if (onUpdateStock) {
+              onUpdateStock(originalInicio.productId, originalInicio.productQty || 1);
+            }
+          }
+
+          // Mark matching active financing as Finalizado
+          finalReceiptsList = receiptsList.map(r => {
+            if (r.id === originalInicio.id) {
+              return { ...r, status: "Finalizado" as const };
+            }
+            return r;
+          });
+        } else {
+          // Fallback: direct "Pago Completo" without an active contract reference
+          if (receiptType === "completo" && !isProductManual && selectedProductId) {
+            const foundProd = products.find(p => p.id === selectedProductId);
+            if (foundProd) {
+              if (onUpdateStock) {
+                onUpdateStock(foundProd.id, productQty);
+              }
+
+              if (onAddSale) {
+                const subtotal = hasItbis ? totalAmount / 1.18 : totalAmount;
+                const itbis = hasItbis ? totalAmount - subtotal : 0;
+                const cartItem = {
+                  product: foundProd,
+                  quantity: productQty
+                };
+
+                const associatedClient = clients.find(c => 
+                  c.name.toLowerCase() === clientName.toLowerCase() || 
+                  (c.phone !== "N/A" && c.phone === phone)
+                );
+
+                const newSale: Sale = {
+                  id: "sale-" + Date.now(),
+                  invoiceNumber: invoiceNumber ? invoiceNumber : receiptNumber,
+                  date: new Date().toISOString(),
+                  items: [cartItem],
+                  subtotal: parseFloat(subtotal.toFixed(2)),
+                  itbis: parseFloat(itbis.toFixed(2)),
+                  total: totalAmount,
+                  client: associatedClient,
+                  paymentMethod: "Efectivo",
+                  ncfType: "NINGUNO"
+                };
+
+                onAddSale(newSale);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const updated = [newRec, ...finalReceiptsList];
     saveReceiptsToStorage(updated);
     showBannerMessage(`🎉 ¡Recibo de pago ${newRec.id} generado de manera exitosa!`);
+
+    // Reset Form Fields after generation to prevent stale/next payment screen calculations
+    setClientName("");
+    setClientCedula("");
+    setPhone("");
+    setProductDescription("");
+    setInvoiceNumber("");
+    setAbonoCuotas(0);
+    setMontoTotalDeuda(0);
+    setAbonoInicialDeuda(0);
+    setMontoInicial(0);
+    setMontoPorCuota(0);
+    setCantidadCuotas(8);
+    setProximoPagoMonto(0);
+    setProximoPagoFecha("");
+    setCuotasPagadas("1/7");
+    setCuotasAtrasadas(0);
+    setTotalAmount(0);
+    setSelectedProductId("");
+    setIsProductManual(false);
+    setFinancedItems([]);
+    setUnitPrice(0);
+    setVendedor(currentUser?.email ? currentUser.email.split("@")[0].toUpperCase() : "LUIS");
+    setPhone2("829-879-5652");
+    setRnc("RNC EN USO");
+    setDireccion("Av. Respaldo los Mártires esq. Máximo Gómez # 11");
+    setFiadorNombre("");
+    setFiadorCedula("");
+    setGarantia("2 años de garantía. La garantía no cubre daño eléctrico y por faltar de mantenimiento.");
   };
 
   // Deletion
   const handleDeleteReceipt = (id: string) => {
-    if (confirm("¿Estás seguro de eliminar este recibo del historial?")) {
-      const updated = receiptsList.filter(r => r.id !== id);
+    setDeleteReceiptId(id);
+  };
+
+  const confirmDeleteReceipt = () => {
+    if (deleteReceiptId) {
+      const updated = receiptsList.filter(r => r.id !== deleteReceiptId);
       saveReceiptsToStorage(updated);
-      showBannerMessage("🗑️ Recibo eliminado del historial local");
+      setDeleteReceiptId(null);
+      showBannerMessage("🗑️ Recibo de pago eliminado correctamente.");
     }
   };
 
   // WhatsApp Sender
   const handleSendWhatsapp = (rec: CustomReceipt) => {
     let text = "";
+    const activeBName = rec.businessName || businessName || businessConfig.name;
     if (rec.type === "cuota") {
       text = 
         `*COPIA - TRANSACCIÓN CELEBRADA* \n` +
-        `*${businessConfig.name.toUpperCase()}*\n` +
+        `*${activeBName.toUpperCase()}*\n` +
         `-----------------------------------------\n` +
         `*FECHA:* ${new Date(rec.date).toLocaleString()}\n` +
         `*TEL:* ${rec.phone2}\n` +
@@ -371,7 +881,7 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
     } else if (rec.type === "completo") {
       text = 
         `*🧾 RECIBO DE PAGO COMPLETO* \n` +
-        `*${businessConfig.name.toUpperCase()}* \n` +
+        `*${activeBName.toUpperCase()}* \n` +
         `*Dirección:* ${rec.direccion}\n` +
         `*TEL:* ${rec.phone2}\n\n` +
         `*CLIENTE:* ${rec.clientName.toUpperCase()}\n` +
@@ -389,18 +899,19 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
     } else {
       text = 
         `*📝 INICIO DE FINANCIAMIENTO* \n` +
-        `*${businessConfig.name.toUpperCase()}*\n` +
+        `*${activeBName.toUpperCase()}*\n` +
         `*Servicios Múltiples de Finanzas*\n` +
         `-----------------------------------------\n` +
         `*VENDEDOR:* ${rec.vendedor}\n` +
         `*CLIENTE:* ${rec.clientName.toUpperCase()}\n` +
         `*CÉDULA:* ${rec.clientCedula || "N/A"}\n` +
-        `*INICIA DEL ART:* RD$ ${rec.montoInicial.toLocaleString("es-DO", {minimumFractionDigits: 2})}\n` +
+        `*PRECIO ARTÍCULO:* RD$ ${rec.totalAmount.toLocaleString("es-DO", {minimumFractionDigits: 2})}\n` +
+        `*INICIA DEL ART (ENGANCHE):* RD$ ${rec.montoInicial.toLocaleString("es-DO", {minimumFractionDigits: 2})}\n` +
         `*CANTIDAD CUOTAS:* ${rec.cantidadCuotas}\n` +
         `*MONTO DE CUOTAS:* RD$ ${rec.montoPorCuota.toLocaleString("es-DO", {minimumFractionDigits: 2})} [${rec.frecuenciaPago}]\n` +
         `-----------------------------------------\n` +
         `*Cant:* ${rec.productQty} | ${rec.productDescription}\n` +
-        `*TOTAL GENERAL FINANCIADO:* RD$ ${rec.totalAmount.toLocaleString("es-DO", {minimumFractionDigits: 2})}\n` +
+        `*TOTAL RESTANTE A FINANCIAR:* RD$ ${(rec.totalAmount - rec.montoInicial).toLocaleString("es-DO", {minimumFractionDigits: 2})}\n` +
         `-----------------------------------------\n` +
         `*Fiador:* ${rec.fiadorNombre || "N/A"} [${rec.fiadorCedula || "-"}]\n` +
         `*Garantía:* ${rec.garantia}\n\n` +
@@ -417,7 +928,7 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
         navigator.share({
           files: [file],
           title: `Recibo ${rec.receiptNumber || rec.id}`,
-          text: `Comparto recibo de ${businessConfig.name}`
+          text: `Comparto recibo de ${activeBName}`
         }).then(() => {
           showBannerMessage("💬 Recibo PDF compartido directamente.");
         }).catch((err) => {
@@ -498,7 +1009,8 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
       doc.text("COPIA CELEBRADA", 40, y, { align: "center" });
       y += 4;
       doc.setFontSize(8);
-      doc.text(businessConfig.name.toUpperCase(), 40, y, { align: "center" });
+      const activeBName = rec.businessName || businessName || businessConfig.name;
+      doc.text(activeBName.toUpperCase(), 40, y, { align: "center" });
       
       doc.setFont("courier", "normal");
       doc.setFontSize(7.5);
@@ -568,6 +1080,8 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
         doc.setFont("courier", "bold");
         doc.text(`FINANCIADO DE   : ${rec.productDescription}`, 5, y);
         y += 4;
+        doc.text(`PRECIO ARTÍCULO : RD$ ${rec.totalAmount?.toLocaleString("es-DO")}`, 5, y);
+        y += 4;
         doc.text(`INICIA DEL ART. : RD$ ${rec.montoInicial?.toLocaleString("es-DO")}`, 5, y);
         y += 4;
         doc.text(`CANTIDAD CUOTAS : ${rec.cantidadCuotas}`, 5, y);
@@ -576,7 +1090,7 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
         y += 4;
         doc.text(`FRECUENCIA      : ${rec.frecuenciaPago.toUpperCase()}`, 5, y);
         y += 4.5;
-        doc.text(`TOTAL FINANZAS  : RD$ ${rec.totalAmount?.toLocaleString("es-DO")}`, 5, y);
+        doc.text(`TOTAL A FINANZ. : RD$ ${(rec.totalAmount - (rec.montoInicial || 0))?.toLocaleString("es-DO")}`, 5, y);
       }
 
       y += 5.5;
@@ -612,7 +1126,8 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
       doc.setFont("helvetica", "bold");
       doc.setFontSize(16);
       doc.setTextColor(15, 118, 110); // deep teal
-      doc.text(businessConfig.name.toUpperCase(), hasLogo ? 44 : 14, 15);
+      const activeBName = rec.businessName || businessName || businessConfig.name;
+      doc.text(activeBName.toUpperCase(), hasLogo ? 44 : 14, 15);
       
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
@@ -766,8 +1281,10 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
         doc.setFont("helvetica", "bold");
         doc.setTextColor(255, 255, 255);
         doc.text("CANTIDAD", 18, y + 5);
-        doc.text("DESCRIPCIÓN DEL ARTÍCULO ADQUIRIDO", 50, y + 5);
-        doc.text("TOTAL A FINANCIAR", 150, y + 5);
+        doc.text("DESCRIPCIÓN DEL ARTÍCULO ADQUIRIDO", 35, y + 5);
+        doc.text("PRECIO VENTA", 112, y + 5);
+        doc.text("ABONO INICIAL", 142, y + 5);
+        doc.text("A FINANCIAR", 172, y + 5);
 
         y += 7;
         doc.setFillColor(248, 250, 252);
@@ -775,9 +1292,11 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
         doc.setFont("helvetica", "normal");
         doc.setTextColor(15, 23, 42);
         doc.text(rec.productQty.toString(), 18, y + 8);
-        doc.text(rec.productDescription, 50, y + 8);
+        doc.text(rec.productDescription, 35, y + 8);
+        doc.text(`RD$ ${rec.totalAmount.toLocaleString("es-DO")}`, 112, y + 8);
+        doc.text(`RD$ ${(rec.montoInicial || 0).toLocaleString("es-DO")}`, 142, y + 8);
         doc.setFont("helvetica", "bold");
-        doc.text(`RD$ ${rec.totalAmount.toLocaleString("es-DO")}`, 150, y + 8);
+        doc.text(`RD$ ${(rec.totalAmount - (rec.montoInicial || 0)).toLocaleString("es-DO")}`, 172, y + 8);
 
         // Fiador solidario info
         if (rec.fiadorNombre) {
@@ -998,6 +1517,71 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
             </div>
           </div>
 
+          {/* COLLAPSIBLE BUSINESS HEADER SETTINGS */}
+          <div className="bg-slate-50/50 rounded-2xl border border-slate-200 p-4 space-y-3 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setIsHeaderSettingsOpen(!isHeaderSettingsOpen)}
+              className="w-full flex items-center justify-between text-left focus:outline-none cursor-pointer group"
+            >
+              <span className="flex items-center gap-2 text-xs font-black text-slate-700 uppercase tracking-wider group-hover:text-emerald-700 transition-colors">
+                <Settings className="h-4 w-4 text-slate-500 group-hover:text-emerald-600 transition-colors" />
+                ⚙️ Ajustar Datos del Negocio y Dirección (Encabezado)
+              </span>
+              <span className="text-[10px] text-slate-400 font-bold bg-slate-200/50 hover:bg-slate-200 px-2 py-1 rounded-lg transition">
+                {isHeaderSettingsOpen ? "▲ OCULTAR" : "▼ MOSTRAR / EDITAR"}
+              </span>
+            </button>
+            
+            {isHeaderSettingsOpen && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-3 border-t border-slate-200 border-dashed animate-fade-in">
+                <div className="md:col-span-2">
+                  <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1">Nombre del Negocio / Empresa</label>
+                  <input
+                    type="text"
+                    value={businessName}
+                    onChange={(e) => handleUpdateBusinessConfig("name", e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-extrabold shadow-sm"
+                    placeholder="Ej: NOVA FACTURACIÓN S.R.L"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1">RNC / Cédula del Negocio</label>
+                  <input
+                    type="text"
+                    value={rnc}
+                    onChange={(e) => handleUpdateBusinessConfig("rnc", e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold shadow-sm"
+                    placeholder="Ej: 1-01-23456-7"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1">Teléfono de Contacto</label>
+                  <input
+                    type="text"
+                    value={phone2}
+                    onChange={(e) => handleUpdateBusinessConfig("phone", e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold shadow-sm"
+                    placeholder="Ej: 809-555-0101"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-1">Dirección del Negocio</label>
+                  <input
+                    type="text"
+                    value={direccion}
+                    onChange={(e) => handleUpdateBusinessConfig("address", e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold shadow-sm"
+                    placeholder="Ej: Av. Winston Churchill, Santiago, RD"
+                  />
+                </div>
+                <div className="md:col-span-2 text-[10px] text-emerald-800 font-extrabold flex items-center gap-1.5 bg-emerald-50 p-2.5 rounded-xl border border-emerald-150 shadow-2xs">
+                  <span>✨ Los cambios realizados aquí se sincronizan de inmediato con la Caja POS Rápida y el sistema de facturas.</span>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* BASIC INFORMATION SECTION */}
           <div className="border border-slate-200/80 rounded-2xl p-5 bg-slate-50/40 space-y-4 shadow-2xs">
             <h3 className="text-xs font-black text-slate-900 uppercase tracking-wide border-b border-slate-150 pb-2.5 flex items-center gap-1.5 font-sans">
@@ -1006,6 +1590,41 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              {receiptType === "cuota" && (
+                <div className="col-span-1 md:col-span-2 bg-indigo-50/50 border border-indigo-100 rounded-2xl p-4 space-y-2">
+                  <label className="block text-[11px] font-black text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                    <Clock className="h-4 w-4 text-indigo-600 animate-pulse" />
+                    Seleccionar de Financiamientos Activos (Autollenado inteligente)
+                  </label>
+                  <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                    Si el cliente está pagando una cuota de una finanza activa registrada, elígelo aquí. El sistema cargará el producto, las cuotas pactadas, calculará la deuda restante restando el enganche inicial y todos sus pagos anteriores en tiempo real:
+                  </p>
+                  <select
+                    onChange={(e) => handleSelectActiveFinancing(e.target.value)}
+                    className="w-full text-xs bg-white border border-indigo-250 rounded-xl px-3 py-2.5 text-indigo-950 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-extrabold shadow-xs"
+                  >
+                    <option value="">-- Manual (Escribir todo o usar Clientes Registrados abajo) --</option>
+                    {receiptsList
+                      .filter(r => r.type === "inicio" && r.status !== "Finalizado")
+                      .map(f => {
+                        // Calculate current remaining balance robustly
+                        const prevCuotas = getPreviousCuotasForContract(
+                          f.receiptNumber || f.invoiceNumber || "",
+                          f.clientName,
+                          f.productDescription
+                        );
+                        const prevPaid = prevCuotas.reduce((sum, r) => sum + (r.abonoCuotas || 0), 0);
+                        const remaining = f.totalAmount - (f.montoInicial || 0) - prevPaid;
+                        return (
+                          <option key={f.id} value={f.id}>
+                            {f.clientName.toUpperCase()} — {f.productDescription} (Contrato: {f.receiptNumber || f.invoiceNumber}, Resta: RD$ {remaining.toLocaleString()})
+                          </option>
+                        );
+                      })}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-[10px] font-black text-emerald-700 uppercase tracking-wider mb-0.5">Mis Clientes Registrados</label>
                 <p className="text-[10px] text-slate-400 mb-1">Si el cliente ya existe, selecciónalo para llenar sus datos de inmediato:</p>
@@ -1113,6 +1732,7 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
                   <label className="block text-[10px] font-black text-cyan-850 uppercase tracking-wider mb-0.5">Listado de Inventario Registrado</label>
                   <p className="text-[10px] text-slate-400 mb-1">Selecciona uno de los productos que ya diste de alta en la sección de inventariado:</p>
                   <select
+                    value={selectedProductId}
                     onChange={(e) => handleSelectProduct(e.target.value)}
                     className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-extrabold"
                   >
@@ -1165,6 +1785,136 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
                   className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-905 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-black text-cyan-800"
                 />
               </div>
+
+              <div>
+                <label className="block text-[10px] font-black text-slate-755 uppercase tracking-wider mb-0.5">Cantidad Comprada / Financiada</label>
+                <p className="text-[10px] text-slate-400 mb-1">Aumenta o disminuye la cantidad del artículo:</p>
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateQty(productQty - 1)}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold px-3.5 py-2 rounded-l-xl border-y border-l border-slate-250 cursor-pointer transition-colors"
+                  >
+                    <Minus className="h-3 w-3" />
+                  </button>
+                  <input
+                    type="number"
+                    min="1"
+                    value={productQty}
+                    onChange={(e) => handleUpdateQty(Number(e.target.value))}
+                    className="w-16 text-center text-xs bg-white border border-slate-250 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-500 font-bold"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateQty(productQty + 1)}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold px-3.5 py-2 rounded-r-xl border-y border-r border-slate-250 cursor-pointer transition-colors"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+
+              {(receiptType === "inicio" || receiptType === "completo") && (
+                <div className="md:col-span-2 flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-3.5 border-t border-dashed border-slate-200 mt-2">
+                  <div className="text-left">
+                    {productDescription.trim() ? (
+                      <span className="text-[10px] text-amber-600 font-extrabold flex items-center gap-1 animate-pulse">
+                        ⚠️ Tienes "{productDescription.trim()}" seleccionado. ¡Presiona el botón para sumarlo a la lista!
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 font-medium">
+                        Selecciona o escribe arriba y agrégalo para combinar varios artículos.
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddFinancedItem}
+                    className={`flex items-center gap-1.5 text-white text-[11px] font-black uppercase px-4 py-2.5 rounded-xl cursor-pointer shadow-md transition-all ${
+                      productDescription.trim()
+                        ? "bg-emerald-600 hover:bg-emerald-700 ring-4 ring-emerald-500/20 scale-102"
+                        : "bg-cyan-600 hover:bg-cyan-700"
+                    }`}
+                  >
+                    <Plus className="h-4 w-4" />
+                    {productDescription.trim() ? "¡Agregar este artículo a la lista!" : "Agregar Producto a la Financiación"}
+                  </button>
+                </div>
+              )}
+
+              {financedItems.length > 0 && (
+                <div className="md:col-span-2 bg-slate-100/60 rounded-xl p-3 border border-slate-200 mt-2">
+                  <h4 className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider mb-2 flex items-center justify-between">
+                    <span>📋 Artículos agregados para financiar ({financedItems.length})</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFinancedItems([]);
+                        showBannerMessage("🗑️ Se limpió la lista de artículos.");
+                      }}
+                      className="text-rose-650 hover:text-rose-850 font-black text-[9px] uppercase cursor-pointer"
+                    >
+                      Limpiar Todo
+                    </button>
+                  </h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-[11px]">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-slate-500 uppercase font-black tracking-wider text-[9px]">
+                          <th className="py-1.5 px-2">Artículo</th>
+                          <th className="py-1.5 px-2 text-center">Cant.</th>
+                          <th className="py-1.5 px-2 text-right">Precio Unit.</th>
+                          <th className="py-1.5 px-2 text-right">Total</th>
+                          <th className="py-1.5 px-2 text-center">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-150 font-bold text-slate-850">
+                        {financedItems.map((item) => (
+                          <tr key={item.id} className="hover:bg-slate-200/40">
+                            <td className="py-2 px-2 max-w-[150px] truncate">{item.name}</td>
+                            <td className="py-2 px-2 text-center">
+                              <div className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-md px-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateItemQty(item.id, -1)}
+                                  className="text-slate-500 hover:text-slate-850 font-black px-1 cursor-pointer"
+                                >
+                                  -
+                                </button>
+                                <span className="font-extrabold text-slate-900 w-4 text-center">{item.quantity}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateItemQty(item.id, 1)}
+                                  className="text-slate-500 hover:text-slate-850 font-black px-1 cursor-pointer"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </td>
+                            <td className="py-2 px-2 text-right text-slate-600 font-mono">RD$ {item.price.toLocaleString()}</td>
+                            <td className="py-2 px-2 text-right text-cyan-800 font-extrabold font-mono">RD$ {(item.price * item.quantity).toLocaleString()}</td>
+                            <td className="py-2 px-2 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveFinancedItem(item.id)}
+                                className="text-rose-500 hover:text-rose-700 cursor-pointer p-1"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="mt-2.5 pt-2 border-t border-slate-200 flex justify-between items-center text-xs font-black text-slate-900">
+                    <span className="uppercase tracking-wider">Total Financiado Acumulado:</span>
+                    <span className="text-cyan-850 text-sm font-black bg-cyan-50 px-2 py-0.5 rounded border border-cyan-200 font-mono">
+                      RD$ {financedItems.reduce((acc, it) => acc + (it.price * it.quantity), 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1196,31 +1946,37 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-black text-indigo-950 uppercase tracking-wider mb-0.5">📥 Abono Inicial que dio (RD$)</label>
-                  <p className="text-[10px] text-slate-400 mb-1">El enganche o abono inicial dado al iniciar el contrato (no el pago de hoy):</p>
-                  <input
-                    type="number"
-                    placeholder="Ej: 10000"
-                    value={abonoInicialDeuda || ""}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      setAbonoInicialDeuda(isNaN(val) ? 0 : val);
-                    }}
-                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
-                  />
+                  <label className="block text-[10px] font-black text-indigo-950 uppercase tracking-wider mb-0.5">📉 Deuda Original Pactada a Cuotas (RD$)</label>
+                  <p className="text-[10px] text-slate-400 mb-1">Monto total a financiar (Monto Total menos el Inicial Descontado):</p>
+                  <div className="w-full text-xs bg-slate-100 border border-slate-250 rounded-xl px-3 py-2 text-indigo-900 font-extrabold bg-indigo-50/10">
+                    RD$ {((montoTotalDeuda || 0) - (abonoInicialDeuda || 0)).toLocaleString()}
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-black text-slate-700 uppercase tracking-wider mb-0.5">No. de Factura / ID Contrato *</label>
                   <p className="text-[10px] text-slate-400 mb-1">Para identificar a qué venta o acuerdo pertenece este abono:</p>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej: 49632768"
-                    value={invoiceNumber}
-                    onChange={(e) => setInvoiceNumber(e.target.value)}
-                    className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej: 49632768"
+                      value={invoiceNumber}
+                      onChange={(e) => setInvoiceNumber(e.target.value)}
+                      className="w-full text-xs bg-white border border-slate-250 rounded-xl px-3 py-2 pr-24 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const randomId = "2ID-" + Math.floor(100000 + Math.random() * 900000);
+                        setInvoiceNumber(randomId);
+                        showBannerMessage("⚡ Nuevo número de factura / contrato generado");
+                      }}
+                      className="absolute right-1.5 top-1.5 text-[9px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold py-1 px-2.5 rounded-lg border border-slate-200 transition cursor-pointer"
+                    >
+                      Generar Nuevo
+                    </button>
+                  </div>
                 </div>
 
                 <div>
@@ -1534,7 +2290,7 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
                 {logo && (
                   <img src={logo} referrerPolicy="no-referrer" alt="Logo de Perfil" className="h-10 w-auto object-contain my-1.5 p-0.5 border border-slate-200 rounded-lg bg-white" />
                 )}
-                <span className="text-[12px] block font-black text-slate-900 uppercase">{businessConfig.name}</span>
+                <span className="text-[12px] block font-black text-slate-900 uppercase">{businessName || businessConfig.name}</span>
                 <span className="text-[9px] font-normal leading-tight text-slate-500 block">SERVICIOS DE FINANCIACIÓN CELEBRADA COMPLETA</span>
                 <span className="text-[9px] font-normal text-slate-500 block">{direccion}</span>
                 <span className="text-[8.5px] font-normal text-slate-500 block">RNC: {rnc} | TEL: {phone2}</span>
@@ -1594,13 +2350,14 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
 
               {receiptType === "inicio" && (
                 <div className="space-y-1 text-slate-800">
-                  <div className="flex justify-between font-bold text-sky-700"><span>*INICIA DEL ART:*</span> <span>RD$ {montoInicial.toLocaleString()}</span></div>
-                  <div className="flex justify-between"><span>*VALOR DE CUOTAS:*</span> <span>RD$ {montoPorCuota.toLocaleString()}</span></div>
+                  <div className="flex justify-between"><span>*PRECIO ORIGINAL ARTÍCULO:*</span> <span>RD$ {totalAmount.toLocaleString()}</span></div>
+                  <div className="flex justify-between font-bold text-sky-700"><span>*INICIAL O ENGANCHE PAGADO:*</span> <span>RD$ {montoInicial.toLocaleString()}</span></div>
                   <div className="flex justify-between"><span>*CANTIDAD CUOTAS:*</span> <span className="font-black">{cantidadCuotas} cuotas</span></div>
+                  <div className="flex justify-between"><span>*VALOR DE CUOTAS:*</span> <span>RD$ {montoPorCuota.toLocaleString()}</span></div>
                   <div className="flex justify-between"><span>*FRECUENCIA:*</span> <span className="font-black text-purple-700">{frecuenciaPago.toUpperCase()}</span></div>
-                  <div className="flex justify-between font-black border-t border-dashed border-slate-200 pt-1">
-                    <span>*TOTAL DE DEUDA:*</span>
-                    <span>RD$ {totalAmount.toLocaleString()}</span>
+                  <div className="flex justify-between font-black border-t border-dashed border-slate-200 pt-1 text-emerald-700">
+                    <span>*TOTAL RESTANTE A FINANCIAR:*</span>
+                    <span>RD$ {(totalAmount - montoInicial).toLocaleString()}</span>
                   </div>
                   {fiadorNombre && (
                     <div className="bg-slate-50 p-1.5 border border-slate-200 rounded mt-2 text-[9px] font-bold">
@@ -1614,7 +2371,6 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
               <div className="text-center pt-2">
                 <p className="text-[8px] leading-tight text-slate-500 block italic">No somos responsables de dinero entregado sin factura oficial emitida por el sistema con firma autorizada.</p>
                 <span className="block my-1">=================================</span>
-                <p className="text-[8px] font-black text-slate-700 block uppercase">Administrado por Nova Facturación</p>
               </div>
 
             </div>
@@ -1852,9 +2608,20 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
                           </span>
                         )}
                         {rec.type === "inicio" && (
-                          <span className="p-1 px-2.5 bg-purple-50 text-purple-700 border border-purple-100 rounded-lg text-[9px] font-black uppercase tracking-wider block w-fit">
-                            Finanza
-                          </span>
+                          <div className="space-y-1">
+                            <span className="p-1 px-2.5 bg-purple-50 text-purple-700 border border-purple-100 rounded-lg text-[9px] font-black uppercase tracking-wider block w-fit">
+                              Finanza
+                            </span>
+                            {rec.status === "Finalizado" ? (
+                              <span className="inline-flex items-center gap-0.5 text-[9px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full font-bold border border-emerald-100 uppercase">
+                                ✔️ Pagado
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-0.5 text-[9px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full font-bold border border-amber-100 uppercase">
+                                ⏳ Activo
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
 
@@ -1924,6 +2691,38 @@ export default function Receipts({ currentUser, clients, products, receiptsList,
       </div>
 
     </div>
+
+    {deleteReceiptId && (
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in animate-duration-150">
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 max-w-sm w-full shadow-2xl relative space-y-4 text-left">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-rose-50 text-rose-600">
+              <Trash2 className="h-5 w-5" />
+            </div>
+            <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">¿Eliminar Recibo?</h3>
+          </div>
+          <p className="text-slate-600 text-xs leading-relaxed">
+            ¿Estás completamente seguro de eliminar el recibo <span className="font-mono font-bold bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded-md">{deleteReceiptId}</span> del historial de la empresa? Esta acción no se puede deshacer.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setDeleteReceiptId(null)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={confirmDeleteReceipt}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl transition cursor-pointer shadow-md shadow-rose-200"
+            >
+              Sí, Eliminar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {customAlert && (
       <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4 animate-fade-in animate-duration-150">
