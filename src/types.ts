@@ -14,6 +14,7 @@ export interface Product {
 export interface CartItem {
   product: Product;
   quantity: number;
+  customPrice?: number; // Optional modified unit price (rebaja / descuento por ítem)
 }
 
 export interface Client {

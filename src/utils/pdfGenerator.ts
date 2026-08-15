@@ -151,7 +151,8 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
       y += 4.5;
       const desc = item.product.name.substring(0, 18).padEnd(18, " ");
       const qty = String(item.quantity).padStart(3, " ");
-      const lineTotal = `RD$${(item.product.price * item.quantity).toFixed(0)}`.padStart(10, " ");
+      const unitPrice = item.customPrice !== undefined ? item.customPrice : item.product.price;
+      const lineTotal = `RD$${(unitPrice * item.quantity).toFixed(0)}`.padStart(10, " ");
       doc.text(`${qty}x ${desc} ${lineTotal}`, 5, y);
     });
 
@@ -313,14 +314,15 @@ export function generateInvoicePDF(sale: Sale, config: BusinessConfig, format: "
       doc.setFont("helvetica", "normal");
       doc.text(String(item.quantity), 120, currentY + 5, { align: "center" });
       
-      const basePrice = item.product.price / 1.18;
-      doc.text(`RD$${item.product.price.toFixed(0)}`, 145, currentY + 5, { align: "right" });
+      const unitPrice = item.customPrice !== undefined ? item.customPrice : item.product.price;
+      const basePrice = unitPrice / 1.18;
+      doc.text(`RD$${unitPrice.toFixed(0)}`, 145, currentY + 5, { align: "right" });
       
-      const lineItbis = item.product.price * (item.product.itbisRate / 100) * item.quantity;
+      const lineItbis = unitPrice * (item.product.itbisRate / 100) * item.quantity;
       doc.text(`RD$${lineItbis.toFixed(0)}`, 168, currentY + 5, { align: "right" });
       
       doc.setFont("helvetica", "bold");
-      const lineTotalVal = item.product.price * item.quantity;
+      const lineTotalVal = unitPrice * item.quantity;
       doc.text(`RD$${lineTotalVal.toFixed(0)}`, 193, currentY + 5, { align: "right" });
 
       currentY += 7.5;

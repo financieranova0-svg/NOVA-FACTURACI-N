@@ -1,5 +1,5 @@
 import { useState, FormEvent } from "react";
-import { Plus, Search, Table, Grid, RotateCcw, PenTool, Check, AlertTriangle, RefreshCw, Trash2, FileText, Send, ShieldAlert, CheckCircle2 } from "lucide-react";
+import { Plus, Search, Table, Grid, RotateCcw, PenTool, Pencil, Check, AlertTriangle, RefreshCw, Trash2, FileText, Send, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { Product, CustomReceipt } from "../types";
 import { INITIAL_CATEGORIES } from "../data";
 import { getBusinessConfig, generateInventoryCatalogPDF } from "../utils/pdfGenerator";
@@ -53,6 +53,18 @@ export default function Inventory({ products, receiptsList = [], onAddProduct, o
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [quickStockValue, setQuickStockValue] = useState("");
   const [deletingProductId, setDeletingProductId] = useState<string | null>(null);
+
+  // Full product edit states
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editPrice, setEditPrice] = useState("");
+  const [editCostPrice, setEditCostPrice] = useState("");
+  const [editStock, setEditStock] = useState("");
+  const [editBarcode, setEditBarcode] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const [editItbisRate, setEditItbisRate] = useState<0 | 8 | 16 | 18>(0);
+  const [editMinStock, setEditMinStock] = useState("5");
+  const [editFinancingPrice, setEditFinancingPrice] = useState("");
 
   // Custom alert to replace blocking window.alert calls
   const [customAlert, setCustomAlert] = useState<{ title: string; message: string; type: "error" | "success" | "warning" } | null>(null);
@@ -187,6 +199,65 @@ export default function Inventory({ products, receiptsList = [], onAddProduct, o
     });
     onUpdateFullProductList(updated);
     setEditingProductId(null);
+  };
+
+  const startEditingProduct = (product: Product) => {
+    setEditingProduct(product);
+    setEditName(product.name);
+    setEditPrice(product.price.toString());
+    setEditCostPrice(product.costPrice?.toString() || "");
+    setEditStock(product.stock.toString());
+    setEditBarcode(product.barcode);
+    setEditCategory(product.category);
+    setEditItbisRate(product.itbisRate);
+    setEditMinStock((product.minStock || 5).toString());
+    setEditFinancingPrice(product.financingPrice?.toString() || "");
+  };
+
+  const handleEditProductSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct) return;
+    if (!editName.trim() || !editPrice || !editStock || !editBarcode.trim()) return;
+
+    // Check if barcode already exists on OTHER products
+    if (products.some((p) => p.id !== editingProduct.id && p.barcode === editBarcode.trim())) {
+      setCustomAlert({
+        title: "Código duplicado",
+        message: `El código de barras "${editBarcode.trim()}" ya está registrado en otro producto de su catálogo.`,
+        type: "error"
+      });
+      return;
+    }
+
+    const priceNum = parseFloat(editPrice);
+    const costPriceNum = parseFloat(editCostPrice) || 0;
+    const financingPriceNum = editFinancingPrice.trim() !== "" ? parseFloat(editFinancingPrice) : undefined;
+
+    const updated = products.map((p) => {
+      if (p.id === editingProduct.id) {
+        return {
+          ...p,
+          name: editName.trim(),
+          price: priceNum,
+          costPrice: costPriceNum,
+          stock: parseInt(editStock, 10),
+          barcode: editBarcode.trim(),
+          category: editCategory,
+          itbisRate: editItbisRate,
+          minStock: parseInt(editMinStock, 10) || 5,
+          financingPrice: financingPriceNum !== undefined && !isNaN(financingPriceNum) ? financingPriceNum : undefined
+        };
+      }
+      return p;
+    });
+
+    onUpdateFullProductList(updated);
+    setEditingProduct(null);
+    setCustomAlert({
+      title: "Producto actualizado",
+      message: "El producto ha sido modificado y guardado con éxito.",
+      type: "success"
+    });
   };
 
   const filteredProducts = products.filter((p) => {
@@ -595,6 +666,18 @@ export default function Inventory({ products, receiptsList = [], onAddProduct, o
                           </button>
 
                           <button
+                            id={`edit-product-${p.id}`}
+                            onClick={() => {
+                              startEditingProduct(p);
+                            }}
+                            title="Editar detalles del producto"
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-500 font-bold hover:underline cursor-pointer ml-3.5"
+                          >
+                            <Pencil className="h-3 w-3" />
+                            Editar
+                          </button>
+
+                          <button
                             id={`delete-product-${p.id}`}
                             onClick={() => {
                               setEditingProductId(null);
@@ -625,6 +708,166 @@ export default function Inventory({ products, receiptsList = [], onAddProduct, o
         </div>
       </div>
     </div>
+
+    {editingProduct && (
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9998] p-4 overflow-y-auto">
+        <div className="bg-white border border-slate-200 rounded-xl p-6 max-w-2xl w-full shadow-2xl relative my-8">
+          <div className="border-b border-slate-200 pb-3 mb-4 flex items-center justify-between">
+            <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">Editar detalles del producto</h3>
+            <button
+              type="button"
+              onClick={() => setEditingProduct(null)}
+              className="text-slate-400 hover:text-slate-650 text-xs font-bold font-mono p-1"
+            >
+              ✕
+            </button>
+          </div>
+
+          <form onSubmit={handleEditProductSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="col-span-full">
+              <label className="block text-xs font-bold text-slate-600 mb-1">Nombre Comercial del Producto</label>
+              <input
+                type="text"
+                required
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Ej: Arroz Selecto La Garza (10 Lb)"
+                className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Categoría</label>
+              <select
+                value={editCategory}
+                onChange={(e) => setEditCategory(e.target.value)}
+                className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              >
+                {INITIAL_CATEGORIES.map((cat) => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Código de Barras</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  required
+                  value={editBarcode}
+                  onChange={(e) => setEditBarcode(e.target.value)}
+                  placeholder="746XXXXXXXXXX"
+                  className="flex-1 text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const generated = "746" + Math.floor(1000000000 + Math.random() * 9000000000).toString();
+                    setEditBarcode(generated);
+                  }}
+                  className="px-2.5 py-2 bg-slate-800 text-slate-100 hover:bg-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                  title="Generar código de barras"
+                >
+                  Generar
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Costo de Compra (RD$ / DOP)</label>
+              <input
+                type="number"
+                step="0.01"
+                required
+                value={editCostPrice}
+                onChange={(e) => setEditCostPrice(e.target.value)}
+                placeholder="0.00"
+                className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Precio de Venta (RD$ / DOP)</label>
+              <input
+                type="number"
+                step="0.01"
+                required
+                value={editPrice}
+                onChange={(e) => setEditPrice(e.target.value)}
+                placeholder="0.00"
+                className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-indigo-750 mb-1 font-semibold">Precio al Financiar (Opcional)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={editFinancingPrice}
+                onChange={(e) => setEditFinancingPrice(e.target.value)}
+                placeholder="Ej: 45000.00"
+                className="w-full text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-indigo-900 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Stock Actual (Cantidad física)</label>
+              <input
+                type="number"
+                required
+                value={editStock}
+                onChange={(e) => setEditStock(e.target.value)}
+                placeholder="0"
+                className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Stock Mínimo (Alerta de aviso)</label>
+              <input
+                type="number"
+                value={editMinStock}
+                onChange={(e) => setEditMinStock(e.target.value)}
+                placeholder="5"
+                className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">ITBIS Aplicable en R.D.</label>
+              <select
+                value={editItbisRate}
+                onChange={(e) => setEditItbisRate(Number(e.target.value) as any)}
+                className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-bold"
+              >
+                <option value="0">0% (Comida Básica / Exento)</option>
+                <option value="8">8% (Tasa Reducida)</option>
+                <option value="16">16% (Tasa Especial)</option>
+                <option value="18">18% (ITBIS General Estándar)</option>
+              </select>
+            </div>
+
+            <div className="col-span-full border-t border-slate-200 pt-4 mt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingProduct(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer"
+              >
+                Guardar Cambios
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
 
     {customAlert && (
       <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4">

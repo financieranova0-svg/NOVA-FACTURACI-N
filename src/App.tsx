@@ -35,7 +35,8 @@ import {
   ExternalLink,
   ChevronRight,
   UserMinus,
-  UserPlus
+  UserPlus,
+  Palette
 } from "lucide-react";
 import { Product, Client, Sale, DailyClosure, AppUser, CustomReceipt } from "./types";
 import { INITIAL_PRODUCTS, INITIAL_CLIENTS } from "./data";
@@ -57,6 +58,13 @@ const DEFAULT_USERS: AppUser[] = [
   },
   {
     email: "christheriault880@gmail.com",
+    bypassPhone: true,
+    createdAt: new Date().toISOString(),
+    expiresAt: "forever",
+    status: "active"
+  },
+  {
+    email: "luisrodriguezgon22@gmail.com",
     bypassPhone: true,
     createdAt: new Date().toISOString(),
     expiresAt: "forever",
@@ -103,6 +111,16 @@ export default function App() {
   const [showInventoryUnlockModal, setShowInventoryUnlockModal] = useState(false);
   const [inventoryPassword, setInventoryPassword] = useState("");
   const [inventoryUnlockError, setInventoryUnlockError] = useState("");
+  
+  // Customizable app background theme
+  const [appBgTheme, setAppBgTheme] = useState<"light" | "dark-blue" | "black" | "charcoal" | "emerald-dark">(() => {
+    return (localStorage.getItem("nova_app_bg_theme") as any) || "light";
+  });
+  const [showBgThemePicker, setShowBgThemePicker] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem("nova_app_bg_theme", appBgTheme);
+  }, [appBgTheme]);
   
   // Sign-in values state
   const [authEmail, setAuthEmail] = useState("");
@@ -267,10 +285,11 @@ export default function App() {
         console.warn("Error looking up existing remote license on start:", e);
       }
 
-      const userStatus = existingRemote?.status || currentUser.status || "active";
-      const userExpiresAt = existingRemote?.expiresAt || currentUser.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const isLuis = cleanEmail === "luisrodriguezgon22@gmail.com";
+      const userStatus = isLuis ? (existingRemote?.status || "active") : (existingRemote?.status || currentUser.status || "active");
+      const userExpiresAt = isLuis ? "forever" : (existingRemote?.expiresAt || currentUser.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString());
       const userPhone = existingRemote?.phone || currentUser.phone || "";
-      const userBypassPhone = existingRemote?.bypassPhone !== undefined ? existingRemote.bypassPhone : (currentUser.bypassPhone || false);
+      const userBypassPhone = isLuis ? true : (existingRemote?.bypassPhone !== undefined ? existingRemote.bypassPhone : (currentUser.bypassPhone || false));
       const userCreatedAt = existingRemote?.createdAt || currentUser.createdAt || new Date().toISOString();
 
       const updatedMyLicense: AppUser = {
@@ -891,9 +910,16 @@ export default function App() {
           const snap = await getDoc(liveLicenseDocRef);
           if (snap.exists() && !isAdminEmail) {
             const liveLicense = snap.data();
+            const isLuisInfinite = email === "luisrodriguezgon22@gmail.com";
+            if (isLuisInfinite) {
+              liveLicense.expiresAt = "forever";
+              if (liveLicense.status !== "suspended") {
+                liveLicense.status = "active";
+              }
+            }
             const isCentrallySuspended = liveLicense.status === "suspended";
-            const isCentrallyExpired = liveLicense.status === "expired" || 
-              (liveLicense.expiresAt !== "forever" && new Date() > new Date(liveLicense.expiresAt));
+            const isCentrallyExpired = !isLuisInfinite && (liveLicense.status === "expired" || 
+              (liveLicense.expiresAt !== "forever" && new Date() > new Date(liveLicense.expiresAt)));
             
             if (isCentrallySuspended || isCentrallyExpired) {
               setAuthMessage(
@@ -1016,7 +1042,8 @@ export default function App() {
 
       // Verificar si la cuenta está suspendida o vencida localmente antes de iniciar
       const isLocalSuspended = !isAdminEmail && existingUser.status === "suspended";
-      const isLocalExpired = !isAdminEmail && (existingUser.status === "expired" || (existingUser.expiresAt !== "forever" && new Date() > new Date(existingUser.expiresAt)));
+      const isLuisInfinite = cleanEmail === "luisrodriguezgon22@gmail.com";
+      const isLocalExpired = !isAdminEmail && !isLuisInfinite && (existingUser.status === "expired" || (existingUser.expiresAt !== "forever" && new Date() > new Date(existingUser.expiresAt)));
       if (isLocalSuspended || isLocalExpired) {
         setAuthMessage(
           isLocalSuspended 
@@ -1176,7 +1203,8 @@ export default function App() {
   // Check if current user is Suspended or has Expired in local list state
   const liveUserState = users.find((u) => u.email.toLowerCase() === currentUser.email.toLowerCase()) || currentUser;
   const isCurrentUserAdmin = liveUserState.email.toLowerCase() === "financieranova0@gmail.com" || liveUserState.email.toLowerCase() === "christheriault880@gmail.com";
-  const isExpired = !isCurrentUserAdmin && liveUserState.expiresAt !== "forever" && new Date() > new Date(liveUserState.expiresAt);
+  const isLuisEmail = liveUserState.email.toLowerCase() === "luisrodriguezgon22@gmail.com";
+  const isExpired = !isCurrentUserAdmin && !isLuisEmail && liveUserState.expiresAt !== "forever" && new Date() > new Date(liveUserState.expiresAt);
   const isSuspended = !isCurrentUserAdmin && liveUserState.status === "suspended";
 
   // Lock Page if account is expired or suspended
@@ -1240,8 +1268,24 @@ export default function App() {
     );
   }
 
+  const getBgThemeClass = (theme: string) => {
+    switch (theme) {
+      case "dark-blue":
+        return "bg-slate-900 text-slate-100";
+      case "black":
+        return "bg-slate-950 text-slate-100";
+      case "charcoal":
+        return "bg-zinc-900 text-zinc-100";
+      case "emerald-dark":
+        return "bg-emerald-950 text-emerald-100";
+      case "light":
+      default:
+        return "bg-slate-50 text-slate-800";
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
+    <div className={`min-h-screen ${getBgThemeClass(appBgTheme)} flex flex-col font-sans transition-colors duration-300`}>
       
       {/* Upper Brand Info and Real Time status bar */}
       <header className="bg-slate-900 text-white shadow-md border-b border-slate-800 shrink-0">
@@ -1274,6 +1318,96 @@ export default function App() {
                 <b>{lowStockProductsCount}</b>
               </div>
             )}
+
+            {/* Custom Background Color Button */}
+            <div className="relative">
+              <button
+                id="header-bg-theme-btn"
+                onClick={() => setShowBgThemePicker((prev) => !prev)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-slate-200 hover:text-white text-[10.5px] font-bold transition cursor-pointer"
+                title="Personalizar color de fondo de la aplicación"
+              >
+                <Palette className="h-3.5 w-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">Fondo:</span>
+                <span className="font-extrabold text-emerald-300 capitalize text-[10px]">
+                  {appBgTheme === "light" ? "Blanco" : appBgTheme === "dark-blue" ? "Azul" : appBgTheme === "black" ? "Negro" : appBgTheme === "charcoal" ? "Gris" : "Verde"}
+                </span>
+              </button>
+
+              {showBgThemePicker && (
+                <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-[9999] space-y-1 text-xs animate-scale-in">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 px-2 py-1 border-b border-slate-800 flex items-center justify-between">
+                    <span>Color de Fondo</span>
+                    <button onClick={() => setShowBgThemePicker(false)} className="text-slate-500 hover:text-slate-300 p-0.5">✕</button>
+                  </div>
+
+                  <button
+                    onClick={() => { setAppBgTheme("light"); setShowBgThemePicker(false); }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-[11px] font-semibold transition cursor-pointer ${
+                      appBgTheme === "light" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-slate-100 border border-slate-400 shrink-0"></span>
+                      <span>Blanco Clásico</span>
+                    </div>
+                    {appBgTheme === "light" && <CheckCircle className="h-3 w-3 text-emerald-400" />}
+                  </button>
+
+                  <button
+                    onClick={() => { setAppBgTheme("dark-blue"); setShowBgThemePicker(false); }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-[11px] font-semibold transition cursor-pointer ${
+                      appBgTheme === "dark-blue" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-slate-900 border border-slate-600 shrink-0"></span>
+                      <span>Azul Oscuro Tranquilo</span>
+                    </div>
+                    {appBgTheme === "dark-blue" && <CheckCircle className="h-3 w-3 text-emerald-400" />}
+                  </button>
+
+                  <button
+                    onClick={() => { setAppBgTheme("black"); setShowBgThemePicker(false); }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-[11px] font-semibold transition cursor-pointer ${
+                      appBgTheme === "black" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-slate-950 border border-slate-700 shrink-0"></span>
+                      <span>Negro Intenso</span>
+                    </div>
+                    {appBgTheme === "black" && <CheckCircle className="h-3 w-3 text-emerald-400" />}
+                  </button>
+
+                  <button
+                    onClick={() => { setAppBgTheme("charcoal"); setShowBgThemePicker(false); }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-[11px] font-semibold transition cursor-pointer ${
+                      appBgTheme === "charcoal" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-zinc-800 border border-zinc-600 shrink-0"></span>
+                      <span>Gris Carbón</span>
+                    </div>
+                    {appBgTheme === "charcoal" && <CheckCircle className="h-3 w-3 text-emerald-400" />}
+                  </button>
+
+                  <button
+                    onClick={() => { setAppBgTheme("emerald-dark"); setShowBgThemePicker(false); }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-[11px] font-semibold transition cursor-pointer ${
+                      appBgTheme === "emerald-dark" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-emerald-950 border border-emerald-700 shrink-0"></span>
+                      <span>Verde Noche</span>
+                    </div>
+                    {appBgTheme === "emerald-dark" && <CheckCircle className="h-3 w-3 text-emerald-400" />}
+                  </button>
+                </div>
+              )}
+            </div>
 
             <div className="flex items-center gap-1.5 bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700 text-[10.5px] text-slate-300 font-mono">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -2092,12 +2226,15 @@ export default function App() {
                     ITEMS FACTURADOS
                   </div>
                   <div className="space-y-1">
-                    {reprintSale.items.map((item) => (
-                      <div key={item.product.id} className="flex justify-between text-[9px]">
-                        <span>{item.quantity}x {item.product.name.slice(0, 22)}</span>
-                        <span>RD${(item.product.price * item.quantity).toFixed(0)}</span>
-                      </div>
-                    ))}
+                    {reprintSale.items.map((item) => {
+                      const unitPrice = item.customPrice !== undefined ? item.customPrice : item.product.price;
+                      return (
+                        <div key={item.product.id} className="flex justify-between text-[9px]">
+                          <span>{item.quantity}x {item.product.name.slice(0, 22)}</span>
+                          <span>RD${(unitPrice * item.quantity).toFixed(0)}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="border-t border-dashed border-slate-300 my-1.5 pt-1 space-y-0.5 text-right font-bold text-slate-800">
                     <div className="flex justify-between text-slate-500">
@@ -2186,7 +2323,7 @@ export default function App() {
                     </thead>
                     <tbody className="divide-y divide-slate-150">
                       {reprintSale.items.map((item) => {
-                        const basePrice = item.product.price;
+                        const basePrice = item.customPrice !== undefined ? item.customPrice : item.product.price;
                         const itbisRate = item.product.itbisRate || 0;
                         const lineItbis = basePrice * (itbisRate / 100);
                         const itemSubtotal = basePrice * item.quantity;
@@ -2291,7 +2428,7 @@ export default function App() {
                                           `*Fecha:* ${new Date(reprintSale.date).toLocaleDateString()}\n` +
                                           `*Cliente:* ${reprintSale.client ? reprintSale.client.name : "Genérico Contado"}\n` +
                                           `-----------------------------------\n` +
-                                          reprintSale.items.map((i) => `• ${i.quantity}x ${i.product.name} = RD$ ${(i.product.price * i.quantity).toFixed(0)}`).join("\n") +
+                                          reprintSale.items.map((i) => `• ${i.quantity}x ${i.product.name} = RD$ ${((i.customPrice !== undefined ? i.customPrice : i.product.price) * i.quantity).toFixed(0)}`).join("\n") +
                                           `\n-----------------------------------\n` +
                                           `*TOTAL GENERAL CONTADO:* RD$ ${reprintSale.total.toFixed(0)}\n\n` +
                                           `※ Factura oficial en formato PDF generada con éxito y descargada en sus documentos. ¡Agradecemos su compra!`;

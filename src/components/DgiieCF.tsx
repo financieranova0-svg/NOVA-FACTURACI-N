@@ -209,14 +209,15 @@ export default function DgiieCF({ sales, clients, onUpdateSale, loggedUserEmail 
     const issueDate = sale.date ? sale.date.split("T")[0] : new Date().toISOString().split("T")[0];
 
     const itemsXml = sale.items.map((item, index) => {
-      const itbisVal = item.product.itbisRate > 0 ? (item.product.price * item.quantity * (item.product.itbisRate / 100)) : 0;
+      const unitPrice = item.customPrice !== undefined ? item.customPrice : item.product.price;
+      const itbisVal = item.product.itbisRate > 0 ? (unitPrice * item.quantity * (item.product.itbisRate / 100)) : 0;
       return `    <Linea>
       <NumeroLinea>${index + 1}</NumeroLinea>
       <IndicadorFacturacion>${item.product.itbisRate > 0 ? 1 : 4}</IndicadorFacturacion>
       <NombreArticulo>${item.product.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</NombreArticulo>
       <Cantidad>${item.quantity}</Cantidad>
-      <PrecioUnitario>${item.product.price.toFixed(2)}</PrecioUnitario>
-      <MontoItem>${(item.product.price * item.quantity).toFixed(2)}</MontoItem>
+      <PrecioUnitario>${unitPrice.toFixed(2)}</PrecioUnitario>
+      <MontoItem>${(unitPrice * item.quantity).toFixed(2)}</MontoItem>
       <ItbisItem>${itbisVal.toFixed(2)}</ItbisItem>
     </Linea>`;
     }).join("\n");

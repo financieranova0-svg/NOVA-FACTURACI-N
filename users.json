@@ -2,14 +2,24 @@
   {
     "email": "financieranova0@gmail.com",
     "bypassPhone": true,
-    "createdAt": "2026-06-19T01:19:15.978Z",
+    "createdAt": "2026-06-19T20:48:38.684Z",
     "expiresAt": "forever",
-    "status": "active"
+    "status": "active",
+    "phone": "",
+    "lastLoginAt": "2026-07-20T21:50:42.831Z",
+    "businessName": "Colmado Esterlin"
   },
   {
     "email": "christheriault880@gmail.com",
     "bypassPhone": true,
-    "createdAt": "2026-06-19T01:19:15.978Z",
+    "createdAt": "2026-07-20T21:50:43.625Z",
+    "expiresAt": "forever",
+    "status": "active"
+  },
+  {
+    "email": "luisrodriguezgon22@gmail.com",
+    "bypassPhone": true,
+    "createdAt": "2026-07-20T21:50:44.000Z",
     "expiresAt": "forever",
     "status": "active"
   }

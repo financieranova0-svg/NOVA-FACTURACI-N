@@ -18,7 +18,8 @@ import {
   FileText,
   Smartphone,
   RotateCcw,
-  X
+  X,
+  Pencil
 } from "lucide-react";
 import { Product, Client, CartItem, PaymentMethod, NcfType, Sale, CustomReceipt } from "../types";
 import { INITIAL_CATEGORIES, generateNcfCode } from "../data";
@@ -95,6 +96,16 @@ export default function POS({
   const [serviceDescription, setServiceDescription] = useState("");
   const [serviceAmount, setServiceAmount] = useState("");
   const [isServiceFeeIncluded, setIsServiceFeeIncluded] = useState(false);
+
+  // Edit cart item price modal state
+  const [editingCartItem, setEditingCartItem] = useState<{
+    productId: string;
+    barcode: string;
+    name: string;
+    currentUnitPrice: number;
+    originalPrice: number;
+  } | null>(null);
+  const [tempCartUnitPrice, setTempCartUnitPrice] = useState<string>("");
   
   // Scanner and Search inputs
   const [barcodeInput, setBarcodeInput] = useState("");
@@ -326,8 +337,51 @@ export default function POS({
     setIsServiceFeeIncluded(false);
   };
 
+  const handleSaveCartItemPrice = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCartItem) return;
+    const val = parseFloat(tempCartUnitPrice);
+    if (isNaN(val) || val < 0) {
+      triggerAlert("error", "Ingrese un precio válido mayor o igual a 0.");
+      return;
+    }
+    setCart((prevCart) =>
+      prevCart.map((item) => {
+        if (item.product.id === editingCartItem.productId) {
+          return {
+            ...item,
+            customPrice: val,
+          };
+        }
+        return item;
+      })
+    );
+    setEditingCartItem(null);
+    setChangeAmount(null);
+    triggerAlert("success", `Precio ajustado a RD$${val.toFixed(2)} para "${editingCartItem.name}".`);
+  };
+
+  const handleResetCartItemPrice = () => {
+    if (!editingCartItem) return;
+    setCart((prevCart) =>
+      prevCart.map((item) => {
+        if (item.product.id === editingCartItem.productId) {
+          const { customPrice, ...rest } = item;
+          return rest;
+        }
+        return item;
+      })
+    );
+    setEditingCartItem(null);
+    setChangeAmount(null);
+    triggerAlert("success", `Precio restablecido al precio de inventario.`);
+  };
+
   // Computations
-  const subtotal = cart.reduce((acc, item) => acc + (item.product.price * item.quantity), 0);
+  const subtotal = cart.reduce((acc, item) => {
+    const unitPrice = item.customPrice !== undefined ? item.customPrice : item.product.price;
+    return acc + (unitPrice * item.quantity);
+  }, 0);
   
   // Custom service fee
   const serviceFeeNum = parseFloat(serviceAmount) || 0;
@@ -335,7 +389,8 @@ export default function POS({
   // ITBIS Breakdown based on product rates
   const itbis = cart.reduce((acc, item) => {
     const rate = item.product.itbisRate;
-    const itemSubtotal = item.product.price * item.quantity;
+    const unitPrice = item.customPrice !== undefined ? item.customPrice : item.product.price;
+    const itemSubtotal = unitPrice * item.quantity;
     return acc + (itemSubtotal * (rate / 100));
   }, 0);
 
@@ -371,8 +426,11 @@ export default function POS({
 
   // Handle final invoice submission
   const handleCheckoutSubmit = (shouldPrint: "thermal" | "letter" | false = "thermal") => {
-    if (cart.length === 0) {
-      triggerAlert("error", "El carrito de ventas está vacío.");
+    const isServiceValid = isServiceFeeIncluded && serviceFeeNum > 0;
+    const isCartValid = cart.length > 0 || isServiceValid;
+
+    if (!isCartValid) {
+      triggerAlert("error", "El carrito de ventas está vacío. Agregue productos a la orden o especifique un Cobro por Servicio.");
       return;
     }
 
@@ -792,66 +850,97 @@ export default function POS({
 
           {/* Cart List Items scroll container */}
           <div className="flex-1 overflow-y-auto max-h-[280px] p-2 space-y-1.5 scrollbar-thin">
-            {cart.map((item) => (
-              <div
-                id={`cart-item-${item.product.barcode}`}
-                key={item.product.id}
-                className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100/80 border border-slate-200/40 transition"
-              >
-                {/* Title and pricing block */}
-                <div className="flex-1 min-w-0 pr-1.5">
-                  <h5 className="text-xs font-semibold text-slate-800 truncate" title={item.product.name}>
-                    {item.product.name}
-                  </h5>
-                  <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5">
-                    <span className="font-mono">RD${item.product.price.toFixed(2)} c/u</span>
-                    <span>•</span>
-                    <span className={`px-1 py-0.1 font-semibold rounded text-[8px] ${
-                      item.product.itbisRate > 0 ? "bg-amber-100/50 text-amber-700" : "bg-emerald-100/50 text-emerald-700"
-                    }`}>
-                      {item.product.itbisRate > 0 ? `ITB ${item.product.itbisRate}%` : "EXENTO"}
+            {cart.map((item) => {
+              const unitPrice = item.customPrice !== undefined ? item.customPrice : item.product.price;
+              const hasCustomPrice = item.customPrice !== undefined && item.customPrice !== item.product.price;
+              return (
+                <div
+                  id={`cart-item-${item.product.barcode}`}
+                  key={item.product.id}
+                  className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100/80 border border-slate-200/40 transition"
+                >
+                  {/* Title and pricing block */}
+                  <div className="flex-1 min-w-0 pr-1.5">
+                    <h5 className="text-xs font-semibold text-slate-800 truncate" title={item.product.name}>
+                      {item.product.name}
+                    </h5>
+                    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5 flex-wrap">
+                      <span className="font-mono font-bold text-slate-700">
+                        RD${unitPrice.toFixed(2)} c/u
+                      </span>
+                      
+                      {hasCustomPrice && (
+                        <span className="line-through text-slate-400 font-mono text-[9px]">
+                          RD${item.product.price.toFixed(2)}
+                        </span>
+                      )}
+
+                      <button
+                        id={`edit-price-${item.product.barcode}`}
+                        onClick={() => {
+                          setEditingCartItem({
+                            productId: item.product.id,
+                            barcode: item.product.barcode,
+                            name: item.product.name,
+                            currentUnitPrice: unitPrice,
+                            originalPrice: item.product.price
+                          });
+                          setTempCartUnitPrice(unitPrice.toString());
+                        }}
+                        title="Editar precio unitario para esta factura (rebaja o descuento)"
+                        className="inline-flex items-center gap-0.5 text-[9px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-1.5 py-0.5 rounded border border-blue-200/60 transition cursor-pointer"
+                      >
+                        <Pencil className="h-2.5 w-2.5" />
+                        {hasCustomPrice ? "Rebaja" : "Editar Precio"}
+                      </button>
+
+                      <span className={`px-1 py-0.1 font-semibold rounded text-[8px] ${
+                        item.product.itbisRate > 0 ? "bg-amber-100/50 text-amber-700" : "bg-emerald-100/50 text-emerald-700"
+                      }`}>
+                        {item.product.itbisRate > 0 ? `ITB ${item.product.itbisRate}%` : "EXENTO"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Counter and actions container */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden shadow-xs shrink-0">
+                      <button
+                        id={`dec-qty-${item.product.barcode}`}
+                        onClick={() => updateQuantity(item.product.id, -1)}
+                        className="p-1 px-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition active:scale-95"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </button>
+                      <span className="px-2.5 text-xs font-bold text-slate-800 font-mono select-none">
+                        {item.quantity}
+                      </span>
+                      <button
+                        id={`inc-qty-${item.product.barcode}`}
+                        onClick={() => updateQuantity(item.product.id, 1)}
+                        className="p-1 px-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition active:scale-95"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                    </div>
+
+                    {/* Individual subtotal */}
+                    <span className="w-16 text-right font-extrabold text-xs text-slate-800 font-mono">
+                      RD${(unitPrice * item.quantity).toFixed(0)}
                     </span>
+
+                    {/* Remove bin */}
+                    <button
+                      id={`remove-item-${item.product.barcode}`}
+                      onClick={() => removeFromCart(item.product.id)}
+                      className="p-1 text-slate-300 hover:text-red-500 rounded transition"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
-
-                {/* Counter and actions container */}
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden shadow-xs shrink-0">
-                    <button
-                      id={`dec-qty-${item.product.barcode}`}
-                      onClick={() => updateQuantity(item.product.id, -1)}
-                      className="p-1 px-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition active:scale-95"
-                    >
-                      <Minus className="h-3 w-3" />
-                    </button>
-                    <span className="px-2.5 text-xs font-bold text-slate-800 font-mono select-none">
-                      {item.quantity}
-                    </span>
-                    <button
-                      id={`inc-qty-${item.product.barcode}`}
-                      onClick={() => updateQuantity(item.product.id, 1)}
-                      className="p-1 px-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition active:scale-95"
-                    >
-                      <Plus className="h-3 w-3" />
-                    </button>
-                  </div>
-
-                  {/* Individual subtotal */}
-                  <span className="w-16 text-right font-extrabold text-xs text-slate-800 font-mono">
-                    RD${(item.product.price * item.quantity).toFixed(0)}
-                  </span>
-
-                  {/* Remove bin */}
-                  <button
-                    id={`remove-item-${item.product.barcode}`}
-                    onClick={() => removeFromCart(item.product.id)}
-                    className="p-1 text-slate-300 hover:text-red-500 rounded transition"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
 
             {cart.length === 0 && (
               <div className="h-44 flex flex-col items-center justify-center text-center p-6 text-slate-400">
@@ -902,7 +991,13 @@ export default function POS({
                   type="number"
                   placeholder="Ej: 500"
                   value={serviceAmount}
-                  onChange={(e) => setServiceAmount(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setServiceAmount(val);
+                    if (parseFloat(val) > 0) {
+                      setIsServiceFeeIncluded(true);
+                    }
+                  }}
                   className="w-full text-[11px] bg-white border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder-slate-300 font-mono font-bold"
                 />
               </div>
@@ -1160,49 +1255,55 @@ export default function POS({
             )}
 
             {/* Submit checkout buttons */}
-            <div className="space-y-2 mt-3.5">
-              <button
-                id="submit-pos-checkout-print-thermal"
-                disabled={cart.length === 0}
-                onClick={() => handleCheckoutSubmit("thermal")}
-                className={`w-full py-3 rounded-lg text-xs font-black tracking-wide uppercase transition flex items-center justify-center gap-2 cursor-pointer ${
-                  cart.length === 0
-                    ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50"
-                    : "bg-emerald-500 hover:bg-emerald-400 text-slate-950 hover:shadow-md active:translate-y-px duration-150"
-                }`}
-              >
-                <Printer className="h-4.5 w-4.5 stroke-2 text-slate-900" />
-                Liquidar factura electrónica e imprimir tamaño botonera
-              </button>
+            {(() => {
+              const isServiceValid = isServiceFeeIncluded && serviceFeeNum > 0;
+              const isCartValid = cart.length > 0 || isServiceValid;
+              return (
+                <div className="space-y-2 mt-3.5">
+                  <button
+                    id="submit-pos-checkout-print-thermal"
+                    disabled={!isCartValid}
+                    onClick={() => handleCheckoutSubmit("thermal")}
+                    className={`w-full py-3 rounded-lg text-xs font-black tracking-wide uppercase transition flex items-center justify-center gap-2 cursor-pointer ${
+                      !isCartValid
+                        ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50"
+                        : "bg-emerald-500 hover:bg-emerald-400 text-slate-950 hover:shadow-md active:translate-y-px duration-150"
+                    }`}
+                  >
+                    <Printer className="h-4.5 w-4.5 stroke-2 text-slate-900" />
+                    Liquidar factura electrónica e imprimir tamaño botonera
+                  </button>
 
-              <button
-                id="submit-pos-checkout-print-letter"
-                disabled={cart.length === 0}
-                onClick={() => handleCheckoutSubmit("letter")}
-                className={`w-full py-3 rounded-lg text-xs font-black tracking-wide uppercase transition flex items-center justify-center gap-2 cursor-pointer ${
-                  cart.length === 0
-                    ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50"
-                    : "bg-blue-600 hover:bg-blue-500 text-white hover:shadow-md active:translate-y-px duration-150"
-                }`}
-              >
-                <FileText className="h-4.5 w-4.5 stroke-2 text-white" />
-                Liquidar factura electrónica e imprimir tamaño carta (PDF grande)
-              </button>
+                  <button
+                    id="submit-pos-checkout-print-letter"
+                    disabled={!isCartValid}
+                    onClick={() => handleCheckoutSubmit("letter")}
+                    className={`w-full py-3 rounded-lg text-xs font-black tracking-wide uppercase transition flex items-center justify-center gap-2 cursor-pointer ${
+                      !isCartValid
+                        ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50"
+                        : "bg-blue-600 hover:bg-blue-500 text-white hover:shadow-md active:translate-y-px duration-150"
+                    }`}
+                  >
+                    <FileText className="h-4.5 w-4.5 stroke-2 text-white" />
+                    Liquidar factura electrónica e imprimir tamaño carta (PDF grande)
+                  </button>
 
-              <button
-                id="submit-pos-checkout-silent"
-                disabled={cart.length === 0}
-                onClick={() => handleCheckoutSubmit(false)}
-                className={`w-full py-2.5 rounded-lg text-xs font-bold tracking-wide uppercase border transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                  cart.length === 0
-                    ? "bg-slate-800/40 text-slate-650 border-transparent cursor-not-allowed"
-                    : "bg-slate-900 border-slate-800 hover:bg-slate-800 text-slate-200"
-                }`}
-              >
-                <Check className="h-4 w-4 stroke-2 text-emerald-500" />
-                Liquidar factura electrónica
-              </button>
-            </div>
+                  <button
+                    id="submit-pos-checkout-silent"
+                    disabled={!isCartValid}
+                    onClick={() => handleCheckoutSubmit(false)}
+                    className={`w-full py-2.5 rounded-lg text-xs font-bold tracking-wide uppercase border transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                      !isCartValid
+                        ? "bg-slate-800/40 text-slate-650 border-transparent cursor-not-allowed"
+                        : "bg-slate-900 border-slate-800 hover:bg-slate-800 text-slate-200"
+                    }`}
+                  >
+                    <Check className="h-4 w-4 stroke-2 text-emerald-500" />
+                    Liquidar factura electrónica
+                  </button>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -1760,6 +1861,91 @@ export default function POS({
            </div>
          </div>
        )}
+
+      {/* Cart Item Custom Price Modal (Rebaja / Descuento por ítem) */}
+      {editingCartItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4">
+          <div className="bg-white border border-slate-200 rounded-xl p-5 max-w-sm w-full shadow-2xl relative space-y-4 animate-scale-in">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+              <div className="flex items-center gap-2 text-slate-800 font-extrabold text-xs uppercase tracking-wider">
+                <Pencil className="h-4 w-4 text-blue-600" />
+                <span>Editar Precio para esta Factura</span>
+              </div>
+              <button
+                type="button"
+                id="btn-close-price-edit-modal"
+                onClick={() => setEditingCartItem(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs font-bold font-mono p-1 rounded transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <span className="text-slate-500 font-medium block text-[11px]">Producto:</span>
+                <span className="font-bold text-slate-800 text-sm block">{editingCartItem.name}</span>
+              </div>
+
+              <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 flex justify-between items-center text-slate-600">
+                <span className="text-[11px]">Precio base en inventario:</span>
+                <span className="font-mono font-extrabold text-slate-800">RD${editingCartItem.originalPrice.toFixed(2)}</span>
+              </div>
+
+              <form onSubmit={handleSaveCartItemPrice} className="space-y-3 pt-1">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Nuevo precio unitario para esta factura (RD$):
+                  </label>
+                  <input
+                    id="input-custom-unit-price"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    required
+                    value={tempCartUnitPrice}
+                    onChange={(e) => setTempCartUnitPrice(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full text-sm font-bold font-mono bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    autoFocus
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1.5 leading-tight">
+                    💡 Este cambio es solo para la cantidad agregada a esta factura (rebaja/descuento) y <b>NO afectará los productos en el inventario</b>.
+                  </p>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  {editingCartItem.currentUnitPrice !== editingCartItem.originalPrice && (
+                    <button
+                      type="button"
+                      id="btn-reset-custom-price"
+                      onClick={handleResetCartItemPrice}
+                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition cursor-pointer"
+                    >
+                      Restablecer
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    id="btn-cancel-custom-price"
+                    onClick={() => setEditingCartItem(null)}
+                    className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    id="btn-save-custom-price"
+                    className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-lg transition shadow-xs cursor-pointer"
+                  >
+                    Guardar Precio
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

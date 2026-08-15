@@ -22,6 +22,13 @@ const DEFAULT_USERS = [
     status: "active"
   },
   {
+    email: "luisrodriguezgon22@gmail.com",
+    bypassPhone: true,
+    createdAt: new Date().toISOString(),
+    expiresAt: "forever",
+    status: "active"
+  },
+  {
     email: "cliente@gmail.com",
     phone: "8095550202",
     bypassPhone: false,
